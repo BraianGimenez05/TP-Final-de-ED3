@@ -1,0 +1,24 @@
+# MCUXpresso / Eclipse
+Debug/
+Release/
+.metadata/
+*.o
+*.d
+*.axf
+*.map
+*.bin
+*.hex
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# KiCad
+*-backups/
+*.kicad_prl
+fp-info-cache
+
+# Sistema
+.DS_Store
+*~
