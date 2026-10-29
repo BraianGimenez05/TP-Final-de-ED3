@@ -58,6 +58,8 @@ Desde un dashboard en Python en la PC, comunicado por UART, el usuario fija el s
 
 ### 💻 Arquitectura de Software (Firmware)
 * **Diagrama de Flujo o Máquina de Estados:** *(pendiente)* `![Máquina de Estados](docs/diagrama_software.png)`
+* **Modelo de la planta y diseño del PID:** ver [docs/modelo_pid.md](docs/modelo_pid.md).
+* **Armado y medición de parámetros:** ver [docs/armado_del_tp.md](docs/armado_del_tp.md).
 
 ---
 
