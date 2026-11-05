@@ -2,7 +2,7 @@
 #include "lpc17xx_pwm.h"
 
 #define PWM_CLK_HZ   25000000U                  // PCLK del PWM = 100 MHz / 4
-#define PWM_FREQ_HZ  20000U                     // 20 kHz: no se escucha
+#define PWM_FREQ_HZ  500U                     // 20 kHz: no se escucha
 #define PWM_PERIODO  (PWM_CLK_HZ / PWM_FREQ_HZ) // 1250 cuentas
 
 static uint16_t dutyActual = 0;
