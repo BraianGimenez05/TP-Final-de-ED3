@@ -120,10 +120,18 @@ flowchart LR
 
 - **220 Ω en el gate:** limita el pico de corriente al cargar el gate.
 - **10 kΩ gate-source (pull-down):** mientras la LPC arranca o se reinicia, el pin queda flotando; esta resistencia mantiene el blower apagado.
-- **Diodo 1N5819:** en paralelo con el blower, con el **cátodo (la raya) hacia +12 V**. Absorbe el pico de tensión del motor cuando el MOSFET se apaga.
+- **Diodo 1N5819 o 1N4007:** en paralelo con el blower, con el **cátodo (la raya) hacia +12 V** y el ánodo al drain. Absorbe el pico de tensión del motor cuando el MOSFET se apaga. **No usar un zener** (por ejemplo el 1N4728A): conduce en inverso a 3,3 V y hace cortocircuito sobre la fuente de 12 V.
 - **Capacitor de 10 µF** entre +12 V y GND, cerca del blower.
 
 **Prueba sola:** conectar el gate a 3,3 V a través de los 220 Ω (por ejemplo, desde la salida de 3,3 V de la placa) → el blower tiene que girar a pleno. Conectarlo a GND → se tiene que detener.
+
+**Protoboard del grupo:** los 12 V van en el **riel rojo de abajo**. El riel rojo de arriba **nunca** lleva 12 V (queda para el 3,3 V). Los dos rieles de GND están unidos.
+
+**Si el blower gira a fondo con la LPC desconectada:** el transistor está en corto (drain-source o colector-emisor), o la resistencia de pull-down quedó conectada a 12 V en vez de a GND. Midan la tensión en el gate/base: si da 0 V y el blower igual gira, el transistor está dañado.
+
+#### Alternativa con transistor bipolar (TIP31C / TIP122)
+
+Al principio se probó con un **TIP31C** (NPN, patas **B-C-E** de frente). No es recomendable: con los ~5 mA que da el pin de la LPC no satura con un blower de 0,26 A (necesitaría ~26 mA de base). Si se usa un bipolar, conviene el **TIP122** (Darlington, mismas patas B-C-E), conectado igual que el MOSFET (base = gate, colector = drain, emisor = source), pero con **470 Ω** en la base en lugar de 220 Ω.
 
 ---
 
