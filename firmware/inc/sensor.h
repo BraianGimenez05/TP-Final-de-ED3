@@ -5,5 +5,6 @@
 
 void     sensor_init(void);
 uint16_t sensor_leer(void);   // valor crudo del ADC: 0 a 4095
+uint16_t sensor_leerPromedio(uint8_t n);
 
 #endif

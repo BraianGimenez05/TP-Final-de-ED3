@@ -1,3 +1,8 @@
+/*
+ * Control de altura de la pelota con PID.
+ * La altura se usa directamente en cuentas del ADC (todavía sin calibrar a cm):
+ * más cuentas = pelota más cerca del sensor = más arriba.
+ */
 #include "LPC17xx.h"
 #include "ventilador.h"
 #include "comunicacionUart.h"
@@ -6,7 +11,309 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define PERIODO_LECTURA_MS  1000     // 5 lecturas por segundo
+#define TS_MS        40      // período del lazo: 40 ms (lo que tarda el Sharp en actualizar)
+#define TELEM_MS     100     // una línea de telemetría cada 100 ms
+#define MUESTRAS     32      // muestras del ADC por lectura
+
+#define U_MIN        150     // límites del duty en modo automático (por mil)
+#define U_MAX        650
+
+// Parámetros del controlador (se pueden cambiar por UART)
+static float    Kp = 0.020f;    // por mil de duty por cada cuenta de error
+static float    Ki = 0.003f;    // por mil por (cuenta · s)
+static float    Kd = 0.024f;    // por mil · s por cuenta
+static float    Tf = 0.05f;     // filtro de la derivada [s]
+static uint16_t u0 = 345;       // duty de equilibrio medido (por mil)
+static uint16_t setpoint = 1916;// ADC con la pelota a mitad del tubo (~1544 mV)
+
+static uint8_t automatico = 0;  // 0 = manual (Dxxx), 1 = PID
+static float   integral = 0;
+static float   derivada = 0;
+static float   yAnterior = 0;
+
+static void mostrarAyuda(void) {
+    comunicacion_enviarTexto("\r\nComandos:\r\n");
+    comunicacion_enviarTexto("  A      arranca el PID\r\n");
+    comunicacion_enviarTexto("  Dxxx   modo manual con duty xxx (0-1000)\r\n");
+    comunicacion_enviarTexto("  Sxxxx  setpoint en cuentas del ADC\r\n");
+    comunicacion_enviarTexto("  Pxxx   Kp x1000   Ixxx  Ki x1000   Kxxx  Kd x1000\r\n");
+    comunicacion_enviarTexto("  Uxxx   duty de equilibrio u0\r\n");
+    comunicacion_enviarTexto("  ?      parametros actuales\r\n");
+}
+
+static void mostrarParametros(void) {
+    char texto[96];
+    sprintf(texto, "SP=%u u0=%u Kp=%d Ki=%d Kd=%d (x1000) modo=%s\r\n",
+            setpoint, u0, (int)(Kp * 1000), (int)(Ki * 1000), (int)(Kd * 1000),
+            automatico ? "AUTO" : "MANUAL");
+    comunicacion_enviarTexto(texto);
+}
+
+static void arrancarPID(void) {
+    yAnterior  = sensor_leerPromedio(MUESTRAS);
+    integral   = 0;           // u0 ya aporta el duty de equilibrio
+    derivada   = 0;
+    automatico = 1;
+    if (ventilador_getDuty() == 0) {   // empujón para que el ventilador arranque
+        ventilador_setDuty(1000);
+        demora_ms(300);
+    }
+    ventilador_setDuty(u0);
+    comunicacion_enviarTexto("PID en marcha\r\n");
+}
+
+// Un paso del PID. Se llama cada TS_MS.
+static void pasoPID(float y) {
+    const float Ts = TS_MS / 1000.0f;
+    float e = (float)setpoint - y;
+
+    // Derivada sobre la medición, filtrada (no salta al cambiar el setpoint)
+    derivada = (Tf * derivada - Kd * (y - yAnterior)) / (Tf + Ts);
+    yAnterior = y;
+
+    float u = u0 + Kp * e + integral + derivada;
+
+    // Saturación
+    float uSat = u;
+    if (uSat < U_MIN) uSat = U_MIN;
+    if (uSat > U_MAX) uSat = U_MAX;
+
+    // Anti-windup: el integrador solo acumula si la salida no está saturada
+    if (u == uSat) {
+        integral += Ki * Ts * e;
+    }
+
+    ventilador_setDuty((uint16_t)uSat);
+}
+
+static void atenderComando(void) {
+    char cmd[16];
+    char texto[48];
+    int valor;
+
+    comunicacion_leerComando(cmd);
+    valor = atoi(&cmd[1]);
+
+    switch (cmd[0]) {
+        case 'A': case 'a':
+            arrancarPID();
+            break;
+        case 'D': case 'd':
+            automatico = 0;
+            ventilador_setDuty(valor);
+            sprintf(texto, "MANUAL duty=%u\r\n", ventilador_getDuty());
+            comunicacion_enviarTexto(texto);
+            break;
+        case 'S': case 's':
+            setpoint = valor;
+            mostrarParametros();
+            break;
+        case 'P': case 'p':
+            Kp = valor / 1000.0f;
+            mostrarParametros();
+            break;
+        case 'I': case 'i':
+            Ki = valor / 1000.0f;
+            mostrarParametros();
+            break;
+        case 'K': case 'k':
+            Kd = valor / 1000.0f;
+            mostrarParametros();
+            break;
+        case 'U': case 'u':
+            u0 = valor;
+            mostrarParametros();
+            break;
+        case '?':
+            mostrarParametros();
+            break;
+        default:
+            mostrarAyuda();
+            break;
+    }
+}
+
+int main(void) {
+    char texto[64];
+    uint32_t ultimoPaso = 0;
+    uint32_t ultimaTelem = 0;
+    uint16_t y = 0;
+
+    ventilador_init();
+    comunicacion_init();
+    sensor_init();
+    demora_init();
+    ventilador_setDuty(0);
+
+    comunicacion_enviarTexto("\r\nControl PID de la pelota\r\n");
+    mostrarAyuda();
+    mostrarParametros();
+
+    while (1) {
+        uint32_t ahora = demora_millis();
+
+        // Lazo de control cada TS_MS
+        if (ahora - ultimoPaso >= TS_MS) {
+            ultimoPaso = ahora;
+            y = sensor_leerPromedio(MUESTRAS);
+            if (automatico) {
+                pasoPID(y);
+            }
+        }
+
+        // Telemetría: tiempo, setpoint, medición, duty
+        if (ahora - ultimaTelem >= TELEM_MS) {
+            ultimaTelem = ahora;
+            sprintf(texto, "t=%lu sp=%u y=%u u=%u\r\n",
+                    ahora, setpoint, y, ventilador_getDuty());
+            comunicacion_enviarTexto(texto);
+        }
+
+        if (comunicacion_hayComando()) {
+            atenderComando();
+        }
+    }
+    return 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * Versiones anteriores del main (desactivadas con #if 0)
+ * ------------------------------------------------------------------------- */
+#if 0
+
+#include "LPC17xx.h"
+#include "ventilador.h"
+#include "comunicacionUart.h"
+#include "sensor.h"
+#include "demora.h"
+#include <stdio.h>
+#include <stdlib.h>
+
+#define PERIODO_MS   100    // una línea cada 100 ms (10 por segundo)
+#define MUESTRAS     32     // muestras por lectura
+
+static uint8_t registrando = 1;   // 1 = manda una línea cada PERIODO_MS
+
+static uint32_t aMilivolts(uint16_t adc) {
+    return (uint32_t)adc * 3300 / 4095;
+}
+
+static void mostrarAyuda(void) {
+    comunicacion_enviarTexto("\r\nComandos:\r\n");
+    comunicacion_enviarTexto("  Dxxx  duty en por mil (0-1000)\r\n");
+    comunicacion_enviarTexto("  ?     estado actual\r\n");
+    comunicacion_enviarTexto("  L     prende/apaga el registro continuo\r\n");
+    comunicacion_enviarTexto("  M     medicion precisa (para calibrar)\r\n");
+    comunicacion_enviarTexto("  H     esta ayuda\r\n");
+}
+
+static void fijarDuty(uint16_t nuevo) {
+    // Si el ventilador está parado, le da un empujón para que arranque
+    if (ventilador_getDuty() == 0 && nuevo > 0) {
+        ventilador_setDuty(1000);
+        demora_ms(300);
+    }
+    ventilador_setDuty(nuevo);
+}
+
+static void medicionPrecisa(void) {
+    char texto[64];
+    uint32_t suma = 0;
+    uint16_t minimo = 4095, maximo = 0;
+    uint8_t i;
+
+    // 20 lecturas separadas 50 ms: cubre 1 segundo
+    for (i = 0; i < 20; i++) {
+        uint16_t v = sensor_leerPromedio(MUESTRAS);
+        suma += v;
+        if (v < minimo) minimo = v;
+        if (v > maximo) maximo = v;
+        demora_ms(50);
+    }
+
+    uint16_t prom = suma / 20;
+    sprintf(texto, "MEDICION ADC=%u V=%lu mV (min=%u max=%u)\r\n",
+            prom, aMilivolts(prom), minimo, maximo);
+    comunicacion_enviarTexto(texto);
+}
+
+int main(void) {
+    char cmd[16];
+    char texto[64];
+    uint32_t ultimo = 0;
+
+    ventilador_init();
+    comunicacion_init();
+    sensor_init();
+    demora_init();
+    ventilador_setDuty(0);
+
+    comunicacion_enviarTexto("\r\nPrueba sensor + ventilador\r\n");
+    mostrarAyuda();
+
+    while (1) {
+        // 1. Registro periódico
+        if (registrando && (demora_millis() - ultimo >= PERIODO_MS)) {
+            ultimo = demora_millis();
+
+            uint16_t adc = sensor_leerPromedio(MUESTRAS);
+            sprintf(texto, "t=%lu duty=%u ADC=%u V=%lu\r\n",
+                    ultimo, ventilador_getDuty(), adc, aMilivolts(adc));
+            comunicacion_enviarTexto(texto);
+        }
+
+        // 2. Comandos
+        if (comunicacion_hayComando()) {
+            comunicacion_leerComando(cmd);
+
+            switch (cmd[0]) {
+                case 'D': case 'd':
+                    fijarDuty(atoi(&cmd[1]));
+                    sprintf(texto, "OK duty=%u\r\n", ventilador_getDuty());
+                    comunicacion_enviarTexto(texto);
+                    break;
+
+                case '?': {
+                    uint16_t adc = sensor_leerPromedio(MUESTRAS);
+                    sprintf(texto, "duty=%u ADC=%u V=%lu mV\r\n",
+                            ventilador_getDuty(), adc, aMilivolts(adc));
+                    comunicacion_enviarTexto(texto);
+                    break;
+                }
+
+                case 'L': case 'l':
+                    registrando = !registrando;
+                    comunicacion_enviarTexto(registrando ? "Registro ON\r\n"
+                                                         : "Registro OFF\r\n");
+                    break;
+
+                case 'M': case 'm':
+                    medicionPrecisa();
+                    break;
+
+                case 'H': case 'h':
+                    mostrarAyuda();
+                    break;
+
+                default:
+                    comunicacion_enviarTexto("Comando desconocido (H = ayuda)\r\n");
+                    break;
+            }
+        }
+    }
+    return 0;
+}
+
+/*sensor+uart
+#include "LPC17xx.h"
+#include "ventilador.h"
+#include "comunicacionUart.h"
+#include "sensor.h"
+#include "demora.h"
+#include <stdio.h>
+#include <stdlib.h>
+
+#define PERIODO_LECTURA_MS  200    // 5 lecturas por segundo
 
 int main(void) {
     char cmd[16];
@@ -25,7 +332,7 @@ int main(void) {
         if (demora_millis() - ultimaLectura >= PERIODO_LECTURA_MS) {
             ultimaLectura = demora_millis();
 
-            uint16_t adc = sensor_leer();
+            uint16_t adc = sensor_leerPromedio(32);   // promedio de 32 muestras
             uint32_t mv  = (uint32_t)adc * 3300 / 4095;
             sprintf(respuesta, "ADC=%u  V=%lu mV\r\n", adc, mv);
             comunicacion_enviarTexto(respuesta);
@@ -47,6 +354,7 @@ int main(void) {
     }
     return 0;
 }
+*/
 
 /*codigo prueba de pwm y uart
 #include "LPC17xx.h"
@@ -129,3 +437,4 @@ int main(void) {
     return 0;
 }
 */
+#endif

@@ -12,3 +12,13 @@ uint16_t sensor_leer(void) {
     while (!ADC_ChannelGetStatus(ADC_CHANNEL_0, ADC_DATA_DONE)) { }  // espera a que termine
     return ADC_ChannelGetData(ADC_CHANNEL_0);                        // 12 bits: 0 a 4095
 }
+
+uint16_t sensor_leerPromedio(uint8_t n) {
+    uint32_t suma = 0;
+    uint8_t i;
+
+    for (i = 0; i < n; i++) {
+        suma += sensor_leer();
+    }
+    return (uint16_t)(suma / n);
+}
