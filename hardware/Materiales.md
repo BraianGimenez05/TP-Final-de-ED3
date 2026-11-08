@@ -22,7 +22,7 @@
 | Resistencia 1 kΩ | 1 | Entre el filtro y P0.23 | |
 | Buzzer piezoeléctrico o LED + 330 Ω | 1 | Salida del DAC | disponible |
 | Tubo transparente | 1 | 55 cm de largo | disponible |
-| Pelotas de ping-pong | varias | 40 mm, 2,7 g | disponible |
+| Pelota de telgopor | varias | Diámetro y masa a medir. Reemplazó a la pelota de ping-pong (40 mm, 2,7 g) | disponible |
 | Estructura | — | Dos placas de madera y cuatro varillas roscadas con tuercas | disponible |
 | Rejilla | 1 | Entre el ventilador y el tubo | |
 | Protoboard y cables Dupont | — | | disponible |

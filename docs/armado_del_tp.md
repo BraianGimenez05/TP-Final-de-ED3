@@ -371,6 +371,8 @@ Se aplicó primero un 100 % durante unos instantes para asegurar el arranque del
 
 **u0 = 68,5 %.** La banda entre caer y subir hasta el extremo es de apenas 2 %. Es el comportamiento esperado de la planta: el término integrador hace que a lazo abierto no exista una altura de equilibrio estable, y cualquier exceso o falta de empuje mueve la pelota hasta un extremo. Cerca del extremo superior la pelota parece quedarse quieta porque el aire escapa por la salida del tubo, pero esa zona no es representativa del punto de trabajo.
 
+Esta medición se hizo con el PWM a 20 kHz y el gate excitado directamente desde la LPC. Después de agregar el optoacoplador (PWM a 500 Hz) y cambiar a la pelota de telgopor, la pelota flota con un duty de aproximadamente 34,5 %. Este es el valor que usa actualmente el firmware como u0.
+
 Se evaluaron dos modificaciones mecánicas para ensanchar la banda: perforar el tubo a lo largo de su altura (el empuje pasaría a depender de la altura) y una fuga regulable en la base (reduce la ganancia por cada % de duty). Se decidió no aplicarlas y resolver la sensibilidad con el lazo cerrado.
 
 ### Ensayo al escalón

@@ -2,7 +2,9 @@
 
 Cálculo del controlador para el levitador neumático: modelo físico, linealización, diseño del PID y verificación por simulación.
 
-Los parámetros marcados como supuestos (τ y el coeficiente de arrastre dentro del tubo) son estimaciones y deben medirse con el equipo armado (ver [sección 7](#7-identificación-de-parámetros-con-el-equipo-armado)). El PWM de equilibrio ya se midió: u0 = 68,5 % (el diseño original suponía 50 %).
+Los parámetros marcados como supuestos (τ y el coeficiente de arrastre dentro del tubo) son estimaciones y deben medirse con el equipo armado (ver [sección 7](#7-identificación-de-parámetros-con-el-equipo-armado)). El PWM de equilibrio ya se midió: u0 = 68,5 % con el PWM a 20 kHz y excitación directa (el diseño original suponía 50 %).
+
+El diseño se hizo con una pelota de ping-pong (40 mm, 2,7 g). La pelota actual es de telgopor, cuya masa y diámetro todavía no se midieron. La masa interviene en $v_{a0}$ y en $\alpha$; sin embargo, $u_0$, $K_f$, $\alpha$ y $\tau$ se identifican experimentalmente con el ensayo al escalón, por lo que el diseño final no depende de estos valores de partida.
 
 ---
 
@@ -82,8 +84,8 @@ La ganancia no depende de la altura: en un tubo, la velocidad del aire es aproxi
 
 | Parámetro | Valor | Origen |
 |---|---|---|
-| $m$ | 2,7 g | pelota de ping-pong |
-| $d$ | 40 mm | → $A = \pi d^2/4 = 1{,}257\cdot10^{-3}$ m² |
+| $m$ | 2,7 g | valor de la pelota de ping-pong usada en el diseño original (la pelota actual es de telgopor; masa a medir) |
+| $d$ | 40 mm | ídem (diámetro a medir) → $A = \pi d^2/4 = 1{,}257\cdot10^{-3}$ m² |
 | $\rho$ | 1,2 kg/m³ | aire |
 | $C_d$ | 0,47 | esfera libre (supuesto; dentro del tubo es mayor) |
 | $k$ | $3{,}54\cdot10^{-4}$ kg/m | $\tfrac12 \rho C_d A$ |
