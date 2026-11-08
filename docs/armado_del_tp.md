@@ -279,7 +279,7 @@ El seguidor evita cargar el pin AOUT. Se usa un buzzer piezoeléctrico, de alta 
 - TX y RX van cruzados.
 - El CP2102 trabaja con lógica de 3,3 V. Su pin 3V3 no se conecta a la LPC, que se alimenta por su propio USB.
 - En Linux el adaptador aparece como `/dev/ttyUSB0`. El usuario debe pertenecer al grupo `dialout` para abrir el puerto (`sudo usermod -aG dialout $USER` y volver a iniciar sesión).
-- Terminal serie: `screen /dev/ttyUSB0 115200`. Se sale con Ctrl+A, K. Si se cierra la ventana sin salir, `screen` queda corriendo en segundo plano; con dos instancias abiertas sobre el mismo puerto, cada una recibe parte de los caracteres y los mensajes aparecen cortados.
+- Terminal serie: `screen /dev/ttyUSB0 9600`. Se sale con Ctrl+A, K. Si se cierra la ventana sin salir, `screen` queda corriendo en segundo plano; con dos instancias abiertas sobre el mismo puerto, cada una recibe parte de los caracteres y los mensajes aparecen cortados.
 
 El protocolo de comandos está documentado en el [README](../README.md#2-protocolo-de-comunicación).
 

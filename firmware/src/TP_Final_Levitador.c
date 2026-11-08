@@ -12,7 +12,7 @@
 #include <stdlib.h>
 
 #define TS_MS        40      // período del lazo: 40 ms (lo que tarda el Sharp en actualizar)
-#define TELEM_MS     100     // una línea de telemetría cada 100 ms
+#define TELEM_MS     200     // una línea cada 200 ms: a 9600 baudios cada línea tarda ~33 ms en salir
 #define MUESTRAS     32      // muestras del ADC por lectura
 
 #define U_MIN        150     // límites del duty en modo automático (por mil)

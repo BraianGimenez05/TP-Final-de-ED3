@@ -19,12 +19,13 @@
 > * Franco Diaz
 > * Braian Gimenez
 > * Gustavo Witanowsky
+
 > **Profesor:** Marcos Blasco
 
 ---
 
 ## 1. Descripción General del Proyecto
-El sistema mantiene una esfera (pelota de ping-pong) suspendida en el aire dentro de un conducto vertical transparente. Un ventilador ubicado en la base del tubo genera el flujo de aire, y un sensor de distancia infrarrojo ubicado en el tope del tubo mide la altura real de la esfera. Una LPC1769 ejecuta un lazo de control PID que ajusta la potencia del ventilador para estabilizar la esfera en la altura de consigna (setpoint) indicada por el usuario.
+El sistema mantiene una esfera (pelota de tergopol) suspendida en el aire dentro de un conducto vertical transparente. Un ventilador ubicado en la base del tubo genera el flujo de aire, y un sensor de distancia infrarrojo ubicado en el tope de la estructura del tubo mide la altura real de la esfera. Una LPC1769 ejecuta un lazo de control PID que ajusta la potencia del ventilador para estabilizar la esfera en la altura de consigna (setpoint) indicada por el usuario.
 
 Desde un dashboard en Python en la PC, comunicado por UART, el usuario fija el setpoint, ajusta las constantes del PID y observa la respuesta del sistema en tiempo real. Está pensado como planta didáctica para estudiar control realimentado: respuesta a escalón, rechazo de perturbaciones y efecto de cada constante del PID.
 
@@ -36,7 +37,7 @@ Desde un dashboard en Python en la PC, comunicado por UART, el usuario fija el s
   * Generar con DAC + DMA una señal de perturbación (senoidal precalculada) para evaluar el rechazo del lazo.
 * Fuera de alcance:
   * Conectividad inalámbrica (Wi-Fi / Bluetooth).
-  * Almacenamiento local de datos (SD / flash).
+  * Almacenamiento de datos en el propio equipo (tarjeta SD o memoria flash). Los ensayos se registran en la PC a través de la UART.
   * Autoajuste (autotuning) de las constantes del PID.
 
 ### Criterios de Aceptación
@@ -50,7 +51,7 @@ Desde un dashboard en Python en la PC, comunicado por UART, el usuario fija el s
 | 6 | La comunicación es bidireccional: la PC envía comandos y la LPC responde y envía telemetría | Dashboard / terminal serie |
 
 ### Posibles Etapas Siguientes
-* Reemplazar el sensor Sharp por un sensor ToF (VL53L0X) más preciso y con menor tiempo de actualización.
+* Reemplazar el sensor Sharp por un sensor más preciso y con menor tiempo de actualización.
 * Autotuning del PID (método de relé / Ziegler-Nichols) y control por modelo.
 * Pasar el circuito de protoboard a PCB.
 * Guardar en flash interna las constantes del PID y la calibración del sensor.
@@ -60,7 +61,7 @@ Desde un dashboard en Python en la PC, comunicado por UART, el usuario fija el s
 ## 2. Protocolo de Comunicación
 
 * Interfaz: UART0 de la LPC1769 (TX = P0.2, RX = P0.3) a través de un adaptador USB-UART CP2102.
-* Configuración: 115200 baudios, 8 bits de datos, sin paridad, 1 bit de stop (8N1).
+* Configuración: 9600 baudios, 8 bits de datos, sin paridad, 1 bit de stop (8N1).
 * Formato: comandos en texto ASCII. Cada comando termina con `\r` o `\n` (tecla Enter). Máximo 15 caracteres por comando.
 * Respuestas: texto ASCII terminado en `\r\n`.
 
@@ -110,7 +111,7 @@ Desde un dashboard en Python en la PC, comunicado por UART, el usuario fija el s
 ### Arquitectura de Software (Firmware)
 * Módulos:
   * `ventilador` — PWM1.1 en P2.0, duty en por mil.
-  * `comunicacionUart` — UART0 a 115200 8N1, recepción de comandos por interrupción.
+  * `comunicacionUart` — UART0 a 9600 8N1, recepción de comandos por interrupción.
   * `sensor` — lectura del ADC (AD0.0, P0.23).
 * Diagrama de flujo o máquina de estados: *(pendiente)* `![Máquina de Estados](docs/diagrama_software.png)`
 * Modelo de la planta y diseño del PID: ver [docs/modelo_pid.md](docs/modelo_pid.md).
@@ -145,7 +146,7 @@ Desde un dashboard en Python en la PC, comunicado por UART, el usuario fija el s
 | 4 | Integración, ensayos (respuesta a escalón, perturbaciones) y documentación. |
 
 * Etapa 1 (validación inicial): estructura de madera con tubo de 55 cm, etapa de potencia con IRLZ44N y PWM funcionando. El primer ventilador (0,11 A) no levantaba la esfera y se reemplazó por uno de 0,26 A. Duty de equilibrio medido: u0 ≈ 68,5 %.
-* Etapa 2 (adquisición y comunicación): UART bidireccional a 115200 baudios con recepción por interrupción y comandos `Dxxx` / `?`. Se agregó un optoacoplador en la etapa de potencia, lo que obligó a bajar el PWM a 500 Hz. Lectura del sensor por ADC en prueba.
+* Etapa 2 (adquisición y comunicación): UART bidireccional a 9600 baudios con recepción por interrupción y comandos `Dxxx` / `?`. Se agregó un optoacoplador en la etapa de potencia, lo que obligó a bajar el PWM a 500 Hz. Lectura del sensor por ADC en prueba.
 * Etapa 3 (integración lógica): *(completar)*
 * Etapa 4 (sistema completo): *(completar)*
 

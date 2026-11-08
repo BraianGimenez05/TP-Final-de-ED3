@@ -10,7 +10,7 @@ static volatile uint8_t comandoListo = 0;  // 1 cuando llegó el Enter
 
 void comunicacion_init(void) {
     UART_CFG_T cfg = {
-        .baudRate = 115200,
+        .baudRate = 9600,
         .parity   = UART_PARITY_NONE,
         .dataBits = UART_DBITS_8,
         .stopBits = UART_STOPBIT_1
