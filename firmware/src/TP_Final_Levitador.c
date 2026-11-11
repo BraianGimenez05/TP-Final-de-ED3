@@ -8,6 +8,7 @@
 #include "comunicacionUart.h"
 #include "sensor.h"
 #include "demora.h"
+#include "perturbacion.h"
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -24,10 +25,10 @@
 // Valores ajustados en el equipo el 11/11/2026 (ensayo 16:18: ±6,8 mm en régimen,
 // recuperación de una perturbación de 5 cm en ~5 s).
 static float    Kp = 0.300f;    // por mil de duty por mm de error
-static float    Ki = 0.020f;    // por mil por (mm · s)
+static float    Ki = 0.030f;    // por mil por (mm · s)
 static float    Kd = 0.360f;    // por mil · s por mm
-static float    Tf = 0.05f;     // filtro de la derivada [s]
-static uint16_t u0 = 505;       // duty de equilibrio (por mil). Se actualiza solo al arrancar el PID
+static float    Tf = 0.10f;     // filtro de la derivada [s]: con 0,10 el ruido del sensor mueve menos el duty
+static uint16_t u0 = 560;       // duty de equilibrio (por mil); se cambia con el comando U
 static uint16_t setpoint = 175; // altura deseada [mm desde la rejilla]
 static uint16_t rampa = 20;     // velocidad con que se mueve el setpoint [mm/s]; 0 = salto directo
 static float    spActual = 175; // setpoint que sigue el PID: avanza hacia "setpoint" a la velocidad "rampa"
@@ -45,36 +46,35 @@ static void mostrarAyuda(void) {
     comunicacion_enviarTexto("  Pxxx   Kp x1000   Ixxx  Ki x1000   Kxxx  Kd x1000\r\n");
     comunicacion_enviarTexto("  Uxxx   duty de equilibrio u0\r\n");
     comunicacion_enviarTexto("  Rxx    rampa del setpoint en mm/s (0 = salto)\r\n");
+    comunicacion_enviarTexto("  Wxx    perturbacion senoidal (DAC), amplitud en por mil (0 = apagada)\r\n");
+    comunicacion_enviarTexto("  Fxx    frecuencia de la perturbacion en decimas de Hz (4-50)\r\n");
     comunicacion_enviarTexto("  ?      parametros actuales\r\n");
 }
 
 static void mostrarParametros(void) {
-    char texto[96];
-    sprintf(texto, "SP=%u u0=%u Kp=%d Ki=%d Kd=%d (x1000) R=%u modo=%s\r\n",
+    char texto[128];
+    sprintf(texto, "SP=%u u0=%u Kp=%d Ki=%d Kd=%d (x1000) W=%u F=%u R=%u modo=%s\r\n",
             setpoint, u0, (int)(Kp * 1000), (int)(Ki * 1000), (int)(Kd * 1000),
+            perturbacion_getAmplitud(), perturbacion_getFrecuencia(),
             rampa, automatico ? "AUTO" : "MANUAL");
     comunicacion_enviarTexto(texto);
 }
 
 static void arrancarPID(void) {
     uint16_t dutyActual = ventilador_getDuty();
+    uint16_t yAhora     = sensor_leerMm();
 
-    // u0 automático: si la pelota venía flotando en modo manual, ese duty es el equilibrio actual
-    if (!automatico && dutyActual >= U_MIN && dutyActual <= U_MAX) {
-        u0 = dutyActual;
-    }
-
-    yAnterior  = sensor_leerMm();
-    integral   = 0;           // u0 ya aporta el duty de equilibrio
-    derivada   = 0;
+    yAnterior   = yAhora;
+    integral    = 0;          // u0 ya aporta el duty de equilibrio
+    derivada    = 0;
 
     // Con rampa, el setpoint arranca desde la altura actual y avanza de a poco hasta el pedido
     spActual = (rampa > 0) ? yAnterior : setpoint;
     if (spActual < SP_MIN) spActual = SP_MIN;
     if (spActual > SP_MAX) spActual = SP_MAX;
 
-    if (dutyActual == 0) {             // empujón para que el ventilador arranque
-        ventilador_setDuty(1000);
+    if (dutyActual == 0) {             // empujón suave para que el motor arranque sin tirar la pelota arriba
+        ventilador_setDuty(u0 + 150 > 1000 ? 1000 : u0 + 150);
         demora_ms(300);
     }
     ventilador_setDuty(u0);
@@ -110,6 +110,9 @@ static void pasoPID(float y) {
     yAnterior = y;
 
     float u = u0 + Kp * e + integral + derivada;
+
+    // Perturbación externa generada con el DAC: se suma al duty para probar el rechazo del lazo
+    // u += perturbacion_getAmplitud() * perturbacion_valor();   // DAC desactivado temporalmente
 
     // Saturación
     float uSat = u;
@@ -172,6 +175,14 @@ static void atenderComando(void) {
             rampa = valor;
             mostrarParametros();
             break;
+        case 'W': case 'w':
+            perturbacion_setAmplitud(valor);
+            mostrarParametros();
+            break;
+        case 'F': case 'f':
+            perturbacion_setFrecuencia(valor);
+            mostrarParametros();
+            break;
         case '?':
             mostrarParametros();
             break;
@@ -190,6 +201,7 @@ int main(void) {
     ventilador_init();
     comunicacion_init();
     sensor_init();
+    // perturbacion_init();   // DAC desactivado temporalmente (prueba: ver si interfiere con el ADC)
     demora_init();
     ventilador_setDuty(0);
 

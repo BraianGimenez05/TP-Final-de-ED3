@@ -31,7 +31,8 @@ SIMULADOR = "SIMULADOR"
 VENTANA_S = 30      # segundos visibles en el gráfico
 RE_TELEM = re.compile(r"t=(\d+) sp=(\d+) y=(\d+) u=(\d+)")
 PAUSA_ENTRE_CMD_MS = 150
-RE_PARAM = re.compile(r"SP=(\d+) u0=(\d+) Kp=(-?\d+) Ki=(-?\d+) Kd=(-?\d+).*?(?:R=(\d+) )?modo=(\w+)")
+RE_PARAM = re.compile(r"SP=(\d+) u0=(\d+) Kp=(-?\d+) Ki=(-?\d+) Kd=(-?\d+).*?"
+                      r"(?:W=(\d+) F=(\d+) )?(?:R=(\d+) )?modo=(\w+)")
 # Los ensayos se guardan en docs/ensayos/ del repo, sin importar desde dónde se ejecute
 CARPETA_ENSAYOS = Path(__file__).resolve().parent.parent / "docs" / "ensayos"
 
@@ -130,6 +131,12 @@ class Dashboard(tk.Tk):
         self.linea_u, = self.ax_u.plot([], [], label="Duty (u)", color="tab:green")
 
         self.ax_y.set_ylabel("Altura [mm]")
+        # Escalas fijas: altura en todo el rango del sensor; duty en el rango que usa el PID
+        self.ax_y.set_ylim(0, 350)
+        self.ax_y.set_yticks(range(0, 351, 50))
+        self.ax_u.set_ylim(0, 750)
+        self.ax_u.set_yticks(range(0, 751, 150))
+        self.ax_y.set_xlim(-VENTANA_S, 0)
         self.ax_u.set_ylabel("Duty [‰]")
         self.ax_u.set_xlabel("Tiempo [s]")
         self.ax_y.legend(loc="upper left")
@@ -159,7 +166,7 @@ class Dashboard(tk.Tk):
         fila.pack(fill=tk.X, pady=2)
         ttk.Label(fila, text="Duty manual [‰]").pack(side=tk.LEFT)
         self.ent_duty = ttk.Entry(fila, width=7)
-        self.ent_duty.insert(0, "505")
+        self.ent_duty.insert(0, "560")
         self.ent_duty.pack(side=tk.LEFT, padx=4)
         ttk.Button(fila, text="Aplicar", command=self._aplicar_duty).pack(side=tk.LEFT)
 
@@ -169,10 +176,12 @@ class Dashboard(tk.Tk):
         self.entradas = {}
         campos = [("S", "Setpoint [mm]", "175"),
                   ("P", "Kp × 1000", "300"),
-                  ("I", "Ki × 1000", "20"),
+                  ("I", "Ki × 1000", "30"),
                   ("K", "Kd × 1000", "360"),
-                  ("U", "u0 [‰]", "505"),
-                  ("R", "Rampa [mm/s]", "20")]
+                  ("U", "u0 [‰]", "560"),
+                  ("R", "Rampa [mm/s]", "20"),
+                  ("W", "Perturbación [‰]", "0"),
+                  ("F", "Frec. pert. [0,1 Hz]", "5")]
         for fila_n, (letra, texto, defecto) in enumerate(campos):
             ttk.Label(params, text=texto).grid(row=fila_n, column=0, sticky=tk.W, pady=1)
             ent = ttk.Entry(params, width=8)
@@ -311,8 +320,8 @@ class Dashboard(tk.Tk):
         self.after(100, self._procesar_rx)      # se vuelve a llamar dentro de 100 ms
 
     def _cargar_parametros(self, grupos):
-        sp, u0, kp, ki, kd, rampa, modo = grupos
-        for letra, valor in zip("SUPIKR", (sp, u0, kp, ki, kd, rampa)):
+        sp, u0, kp, ki, kd, amp, frec, rampa, modo = grupos
+        for letra, valor in zip("SUPIKWFR", (sp, u0, kp, ki, kd, amp, frec, rampa)):
             if valor is None:                   # firmware viejo, sin rampa
                 continue
             self.entradas[letra].delete(0, tk.END)
@@ -339,9 +348,6 @@ class Dashboard(tk.Tk):
             self.linea_sp.set_data(ts, self.sp)
             self.linea_u.set_data(ts, self.u)
             self.ax_y.set_xlim(-VENTANA_S, 0)
-            for ax in (self.ax_y, self.ax_u):
-                ax.relim()                          # recalcula el rango de los datos
-                ax.autoscale_view(scalex=False)     # ajusta el eje vertical
             self.canvas.draw_idle()
         self.after(250, self._actualizar_grafico)
 

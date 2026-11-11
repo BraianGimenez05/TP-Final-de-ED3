@@ -69,15 +69,17 @@ Desde un dashboard en Python en la PC, comunicado por UART, el usuario fija el s
 
 | Comando | Descripción | Ejemplo | Respuesta |
 |---|---|---|---|
-| `A` | Arranca el PID (modo automático). Si la pelota venía flotando en modo manual, toma ese duty como u0 (u0 automático). Si el ventilador está detenido, aplica 100 % durante 300 ms para que arranque | `A` | `PID en marcha` y línea de parámetros |
+| `A` | Arranca el PID (modo automático) usando el u0 configurado. Si el ventilador está detenido, aplica u0 + 150 ‰ durante 300 ms para que arranque | `A` | `PID en marcha` y línea de parámetros |
 | `Dxxx` | Modo manual: detiene el PID y fija el duty en `xxx` por mil (0–1000) | `D505` | `MANUAL duty=505` |
 | `Sxxx` | Setpoint de altura en mm desde la rejilla. Se limita a 100–300 mm | `S175` | línea de parámetros |
 | `Pxxx` | Kp × 1000, en ‰ de duty por mm de error | `P300` | línea de parámetros |
-| `Ixxx` | Ki × 1000, en ‰ de duty por (mm · s) | `I20` | línea de parámetros |
+| `Ixxx` | Ki × 1000, en ‰ de duty por (mm · s) | `I30` | línea de parámetros |
 | `Kxxx` | Kd × 1000, en ‰ de duty · s por mm | `K360` | línea de parámetros |
-| `Uxxx` | Duty de equilibrio u0, en por mil | `U505` | línea de parámetros |
+| `Uxxx` | Duty de equilibrio u0, en por mil | `U560` | línea de parámetros |
 | `Rxx` | Velocidad de la rampa del setpoint, en mm/s (0 = el setpoint cambia de golpe). Máximo 200 | `R20` | línea de parámetros |
-| `?` | Consulta los parámetros actuales | `?` | `SP=175 u0=505 Kp=300 Ki=20 Kd=360 (x1000) R=20 modo=AUTO` |
+| `Wxx` | Amplitud de la perturbación senoidal generada con el DAC, en por mil de duty (0 = apagada). Máximo 200 | `W60` | línea de parámetros |
+| `Fxx` | Frecuencia de la perturbación, en décimas de Hz (4 a 50 = 0,4 a 5 Hz) | `F5` | línea de parámetros |
+| `?` | Consulta los parámetros actuales | `?` | `SP=175 u0=560 Kp=300 Ki=30 Kd=360 (x1000) W=0 F=5 R=20 modo=AUTO` |
 | (otro) | Comando no reconocido | `X` | lista de comandos |
 
 Los parámetros modificados por UART se pierden al reiniciar la placa; los valores por defecto están en el firmware.
@@ -129,6 +131,7 @@ t=12340 sp=175 y=173 u=508
   * `comunicacionUart` — UART0 a 9600 8N1, recepción de comandos por interrupción.
   * `sensor` — ADC en modo burst (AD0.0, P0.23) con GPDMA en buffer circular de 64 muestras; conversión a mm con tabla de calibración.
   * `demora` — Timer0 como base de tiempo en µs (esperas y período del lazo).
+  * `perturbacion` — DAC (AOUT, P0.26) alimentado por GPDMA (canal 1, buffer circular) con una tabla de 1024 muestras de una senoidal. El contador del DAC fija la frecuencia (0,4 a 5 Hz). El PID suma el valor actual del DAC al duty para generar una perturbación controlada; la salida maneja un buzzer activo a través de un seguidor.
 * Diagrama de flujo o máquina de estados: *(pendiente)* `![Máquina de Estados](docs/diagrama_software.png)`
 * Modelo de la planta y diseño del PID: ver [docs/modelo_pid.md](docs/modelo_pid.md).
 * Armado y medición de parámetros: ver [docs/armado_del_tp.md](docs/armado_del_tp.md).
