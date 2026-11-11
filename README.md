@@ -46,7 +46,7 @@ Desde un dashboard en Python en la PC, comunicado por UART, el usuario fija el s
 | 1 | La esfera se mantiene en el setpoint con un error de ±2 cm en régimen permanente | Telemetría por UART durante 30 s |
 | 2 | Ante un escalón de setpoint de 10 cm, el sobrepico es menor al 10 % | Gráfico de la respuesta en el dashboard |
 | 3 | Ante el mismo escalón, el tiempo de establecimiento es menor a 6 s (banda de ±2 cm) | Gráfico de la respuesta en el dashboard |
-| 4 | El setpoint se puede fijar entre 10 y 40 cm desde la PC | Comandos por UART |
+| 4 | El setpoint se puede fijar entre 10 y 30 cm desde la PC (rango útil del sensor en este tubo) | Comandos por UART |
 | 5 | La esfera vuelve al setpoint luego de una perturbación (golpe de aire o señal del DAC) | Ensayo de perturbación |
 | 6 | La comunicación es bidireccional: la PC envía comandos y la LPC responde y envía telemetría | Dashboard / terminal serie |
 
@@ -69,18 +69,33 @@ Desde un dashboard en Python en la PC, comunicado por UART, el usuario fija el s
 
 | Comando | Descripción | Ejemplo | Respuesta |
 |---|---|---|---|
-| `Dxxx` | Fija el duty del ventilador en `xxx` por mil (0–1000 = 0,0 %–100,0 %). Los valores mayores a 1000 se limitan a 1000 | `D685` | `OK duty=685` |
-| `?` | Consulta el duty actual | `?` | `duty=685` |
-| (otro) | Comando no reconocido | `X` | `Comando desconocido` |
+| `A` | Arranca el PID (modo automático). Si la pelota venía flotando en modo manual, toma ese duty como u0 (u0 automático). Si el ventilador está detenido, aplica 100 % durante 300 ms para que arranque | `A` | `PID en marcha` y línea de parámetros |
+| `Dxxx` | Modo manual: detiene el PID y fija el duty en `xxx` por mil (0–1000) | `D505` | `MANUAL duty=505` |
+| `Sxxx` | Setpoint de altura en mm desde la rejilla. Se limita a 100–300 mm | `S175` | línea de parámetros |
+| `Pxxx` | Kp × 1000, en ‰ de duty por mm de error | `P300` | línea de parámetros |
+| `Ixxx` | Ki × 1000, en ‰ de duty por (mm · s) | `I20` | línea de parámetros |
+| `Kxxx` | Kd × 1000, en ‰ de duty · s por mm | `K360` | línea de parámetros |
+| `Uxxx` | Duty de equilibrio u0, en por mil | `U505` | línea de parámetros |
+| `Rxx` | Velocidad de la rampa del setpoint, en mm/s (0 = el setpoint cambia de golpe). Máximo 200 | `R20` | línea de parámetros |
+| `?` | Consulta los parámetros actuales | `?` | `SP=175 u0=505 Kp=300 Ki=20 Kd=360 (x1000) R=20 modo=AUTO` |
+| (otro) | Comando no reconocido | `X` | lista de comandos |
 
-### Comandos planificados
+Los parámetros modificados por UART se pierden al reiniciar la placa; los valores por defecto están en el firmware.
 
-| Comando | Descripción |
+### Telemetría
+
+Cada 200 ms la LPC envía una línea con el tiempo desde el arranque, el setpoint, la altura medida y el duty aplicado:
+
+```text
+t=12340 sp=175 y=173 u=508
+```
+
+| Campo | Unidad |
 |---|---|
-| `Sxx` | Fija el setpoint de altura en cm |
-| `Px` / `Ix` / `Kx` | Ajusta las constantes Kp, Ki y Kd del PID |
-| `M` / `A` | Cambia entre modo manual (duty fijo) y automático (PID) |
-| Telemetría | La LPC envía periódicamente altura, setpoint, error y duty para el dashboard |
+| `t` | ms desde el arranque |
+| `sp` | mm (setpoint que sigue el PID; con rampa, avanza de a poco hasta el valor pedido) |
+| `y` | mm (altura de la pelota desde la rejilla) |
+| `u` | por mil |
 
 ---
 
@@ -112,7 +127,8 @@ Desde un dashboard en Python en la PC, comunicado por UART, el usuario fija el s
 * Módulos:
   * `ventilador` — PWM1.1 en P2.0, duty en por mil.
   * `comunicacionUart` — UART0 a 9600 8N1, recepción de comandos por interrupción.
-  * `sensor` — lectura del ADC (AD0.0, P0.23).
+  * `sensor` — ADC en modo burst (AD0.0, P0.23) con GPDMA en buffer circular de 64 muestras; conversión a mm con tabla de calibración.
+  * `demora` — Timer0 como base de tiempo en µs (esperas y período del lazo).
 * Diagrama de flujo o máquina de estados: *(pendiente)* `![Máquina de Estados](docs/diagrama_software.png)`
 * Modelo de la planta y diseño del PID: ver [docs/modelo_pid.md](docs/modelo_pid.md).
 * Armado y medición de parámetros: ver [docs/armado_del_tp.md](docs/armado_del_tp.md).
@@ -146,8 +162,8 @@ Desde un dashboard en Python en la PC, comunicado por UART, el usuario fija el s
 | 4 | Integración, ensayos (respuesta a escalón, perturbaciones) y documentación. |
 
 * Etapa 1 (validación inicial): estructura de madera con tubo de 55 cm, etapa de potencia con IRLZ44N y PWM funcionando. El primer ventilador (0,11 A) no levantaba la esfera y se reemplazó por uno de 0,26 A. Duty de equilibrio medido: u0 ≈ 68,5 %.
-* Etapa 2 (adquisición y comunicación): UART bidireccional a 9600 baudios con recepción por interrupción y comandos `Dxxx` / `?`. Se agregó un optoacoplador en la etapa de potencia, lo que obligó a bajar el PWM a 500 Hz. Lectura del sensor por ADC en prueba.
-* Etapa 3 (integración lógica): *(completar)*
+* Etapa 2 (adquisición y comunicación): UART bidireccional a 9600 baudios con recepción por interrupción y protocolo de comandos. Se agregó un optoacoplador en la etapa de potencia, lo que obligó a bajar el PWM a 500 Hz. Lectura del sensor con ADC + DMA y calibración a mm. Dashboard en Python ([pc/dashboard.py](pc/dashboard.py)).
+* Etapa 3 (integración lógica): PID en mm funcionando en el equipo, con ganancias ajustadas experimentalmente (u0 = 50,5 %, Kp = 0,30, Ki = 0,020, Kd = 0,36). Pendiente: ensayo de escalón de setpoint con las ganancias finales.
 * Etapa 4 (sistema completo): *(completar)*
 
 El seguimiento semanal del equipo está en la carpeta [scrum/](scrum/).
@@ -157,8 +173,18 @@ El seguimiento semanal del equipo está en la carpeta [scrum/](scrum/).
 ## 6. Ensayos, Pruebas y Resultados
 * Pruebas funcionales realizadas:
   * Duty de equilibrio: con 68,0 % la esfera cae, con 68,5 % flota al 30–40 % del tubo y con 70,0 % sube hasta arriba.
-  * *(pendiente)* Curva de calibración del sensor (tensión vs. altura medida con regla).
-  * *(pendiente)* Respuesta a escalón de setpoint: sobrepico, tiempo de establecimiento, error en estado estacionario.
+  * Curva de calibración del sensor (pelota a alturas conocidas, ventilador apagado):
+
+    | Altura [cm] | 0 | 10 | 15 | 20 | 25 | 30 | 35 | 40 |
+    |---|---|---|---|---|---|---|---|---|
+    | ADC | 1356 | 1566 | 1797 | 2040 | 2287 | 2525 | 2693 | 2638 |
+
+    Entre 10 y 30 cm la curva es prácticamente lineal (~48 cuentas/cm) y el ruido es menor a ±0,5 cm. Por encima de ~35 cm la curva se invierte (zona ciega del sensor), por lo que el setpoint se limita a 10–30 cm.
+  * Regulación con u0 = 50,5 %, Kp = 0,30, Ki = 0,020, Kd = 0,36 (‰ por mm), setpoint 175 mm: altura media 175,5 mm, desvío estándar 6,8 mm; la pelota permanece el 87 % del tiempo dentro de ±1 cm y el 99 % dentro de ±2 cm (criterio 1).
+  * Perturbación (la pelota se desplazó 5 cm hacia abajo): vuelve al setpoint en 4,8 s, con un sobrepico de 1,9 cm (criterio 5).
+  * El duty de equilibrio varía entre ensayos (de 46,5 % a 52,4 % en un mismo día), por lo que u0 se reajusta y el integrador compensa la diferencia.
+  * Escalón de setpoint de ~6 cm (17,4 → 23,2 cm), con las ganancias anteriores (Kp = 0,24, Ki = 0,014, Kd = 0,29): llega al nuevo valor en ~5,6 s, con sobrepico de ~45–50 % y establecimiento de ~15 s. Pendiente repetirlo con las ganancias actuales (criterios 2 y 3).
+  * Registros de los ensayos en [docs/ensayos/](docs/ensayos/).
   * *(pendiente)* Rechazo de perturbaciones generadas con el DAC.
 * Evidencia fotográfica y gráficos:
   * *Capturas de instrumental:* *(osciloscopio: salida del filtro, PWM, DAC)*

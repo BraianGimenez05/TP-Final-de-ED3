@@ -1,7 +1,7 @@
 /*
  * Control de altura de la pelota con PID.
- * La altura se usa directamente en cuentas del ADC (todavía sin calibrar a cm):
- * más cuentas = pelota más cerca del sensor = más arriba.
+ * La altura se mide en mm desde la rejilla, con la tabla de calibración del sensor
+ * (sensor_leerMm). El rango útil del Sharp en este tubo es de 100 a 300 mm.
  */
 #include "LPC17xx.h"
 #include "ventilador.h"
@@ -13,18 +13,24 @@
 
 #define TS_MS        40      // período del lazo: 40 ms (lo que tarda el Sharp en actualizar)
 #define TELEM_MS     200     // una línea cada 200 ms: a 9600 baudios cada línea tarda ~33 ms en salir
-#define MUESTRAS     32      // muestras del ADC por lectura
 
 #define U_MIN        150     // límites del duty en modo automático (por mil)
 #define U_MAX        650
 
-// Parámetros del controlador (se pueden cambiar por UART)
-static float    Kp = 0.020f;    // por mil de duty por cada cuenta de error
-static float    Ki = 0.003f;    // por mil por (cuenta · s)
-static float    Kd = 0.024f;    // por mil · s por cuenta
+#define SP_MIN       100     // límites del setpoint [mm]: fuera de este rango el sensor no mide bien
+#define SP_MAX       300
+
+// Parámetros del controlador (se pueden cambiar por UART).
+// Valores ajustados en el equipo el 11/11/2026 (ensayo 16:18: ±6,8 mm en régimen,
+// recuperación de una perturbación de 5 cm en ~5 s).
+static float    Kp = 0.300f;    // por mil de duty por mm de error
+static float    Ki = 0.020f;    // por mil por (mm · s)
+static float    Kd = 0.360f;    // por mil · s por mm
 static float    Tf = 0.05f;     // filtro de la derivada [s]
-static uint16_t u0 = 345;       // duty de equilibrio medido (por mil)
-static uint16_t setpoint = 1916;// ADC con la pelota a mitad del tubo (~1544 mV)
+static uint16_t u0 = 505;       // duty de equilibrio (por mil). Se actualiza solo al arrancar el PID
+static uint16_t setpoint = 175; // altura deseada [mm desde la rejilla]
+static uint16_t rampa = 20;     // velocidad con que se mueve el setpoint [mm/s]; 0 = salto directo
+static float    spActual = 175; // setpoint que sigue el PID: avanza hacia "setpoint" a la velocidad "rampa"
 
 static uint8_t automatico = 0;  // 0 = manual (Dxxx), 1 = PID
 static float   integral = 0;
@@ -35,37 +41,69 @@ static void mostrarAyuda(void) {
     comunicacion_enviarTexto("\r\nComandos:\r\n");
     comunicacion_enviarTexto("  A      arranca el PID\r\n");
     comunicacion_enviarTexto("  Dxxx   modo manual con duty xxx (0-1000)\r\n");
-    comunicacion_enviarTexto("  Sxxxx  setpoint en cuentas del ADC\r\n");
+    comunicacion_enviarTexto("  Sxxx   setpoint en mm (100-300)\r\n");
     comunicacion_enviarTexto("  Pxxx   Kp x1000   Ixxx  Ki x1000   Kxxx  Kd x1000\r\n");
     comunicacion_enviarTexto("  Uxxx   duty de equilibrio u0\r\n");
+    comunicacion_enviarTexto("  Rxx    rampa del setpoint en mm/s (0 = salto)\r\n");
     comunicacion_enviarTexto("  ?      parametros actuales\r\n");
 }
 
 static void mostrarParametros(void) {
     char texto[96];
-    sprintf(texto, "SP=%u u0=%u Kp=%d Ki=%d Kd=%d (x1000) modo=%s\r\n",
+    sprintf(texto, "SP=%u u0=%u Kp=%d Ki=%d Kd=%d (x1000) R=%u modo=%s\r\n",
             setpoint, u0, (int)(Kp * 1000), (int)(Ki * 1000), (int)(Kd * 1000),
-            automatico ? "AUTO" : "MANUAL");
+            rampa, automatico ? "AUTO" : "MANUAL");
     comunicacion_enviarTexto(texto);
 }
 
 static void arrancarPID(void) {
-    yAnterior  = sensor_leerPromedio(MUESTRAS);
+    uint16_t dutyActual = ventilador_getDuty();
+
+    // u0 automático: si la pelota venía flotando en modo manual, ese duty es el equilibrio actual
+    if (!automatico && dutyActual >= U_MIN && dutyActual <= U_MAX) {
+        u0 = dutyActual;
+    }
+
+    yAnterior  = sensor_leerMm();
     integral   = 0;           // u0 ya aporta el duty de equilibrio
     derivada   = 0;
-    automatico = 1;
-    if (ventilador_getDuty() == 0) {   // empujón para que el ventilador arranque
+
+    // Con rampa, el setpoint arranca desde la altura actual y avanza de a poco hasta el pedido
+    spActual = (rampa > 0) ? yAnterior : setpoint;
+    if (spActual < SP_MIN) spActual = SP_MIN;
+    if (spActual > SP_MAX) spActual = SP_MAX;
+
+    if (dutyActual == 0) {             // empujón para que el ventilador arranque
         ventilador_setDuty(1000);
         demora_ms(300);
     }
     ventilador_setDuty(u0);
+    automatico = 1;
     comunicacion_enviarTexto("PID en marcha\r\n");
+    mostrarParametros();
+}
+
+// Mueve spActual hacia el setpoint pedido, como máximo "rampa" mm por segundo
+static void actualizarRampa(float Ts) {
+    float paso = rampa * Ts;
+
+    if (rampa == 0) {
+        spActual = setpoint;
+    } else if (spActual < setpoint) {
+        spActual += paso;
+        if (spActual > setpoint) spActual = setpoint;
+    } else if (spActual > setpoint) {
+        spActual -= paso;
+        if (spActual < setpoint) spActual = setpoint;
+    }
 }
 
 // Un paso del PID. Se llama cada TS_MS.
 static void pasoPID(float y) {
     const float Ts = TS_MS / 1000.0f;
-    float e = (float)setpoint - y;
+
+    actualizarRampa(Ts);
+    float e = spActual - y;
 
     // Derivada sobre la medición, filtrada (no salta al cambiar el setpoint)
     derivada = (Tf * derivada - Kd * (y - yAnterior)) / (Tf + Ts);
@@ -105,7 +143,12 @@ static void atenderComando(void) {
             comunicacion_enviarTexto(texto);
             break;
         case 'S': case 's':
+            if (valor < SP_MIN) valor = SP_MIN;   // fuera de este rango el sensor no mide bien
+            if (valor > SP_MAX) valor = SP_MAX;
             setpoint = valor;
+            if (!automatico || rampa == 0) {
+                spActual = setpoint;      // sin PID andando, no hace falta rampa
+            }
             mostrarParametros();
             break;
         case 'P': case 'p':
@@ -122,6 +165,11 @@ static void atenderComando(void) {
             break;
         case 'U': case 'u':
             u0 = valor;
+            mostrarParametros();
+            break;
+        case 'R': case 'r':
+            if (valor > 200) valor = 200;
+            rampa = valor;
             mostrarParametros();
             break;
         case '?':
@@ -155,7 +203,7 @@ int main(void) {
         // Lazo de control cada TS_MS
         if (ahora - ultimoPaso >= TS_MS) {
             ultimoPaso = ahora;
-            y = sensor_leerPromedio(MUESTRAS);
+            y = sensor_leerMm();
             if (automatico) {
                 pasoPID(y);
             }
@@ -165,7 +213,7 @@ int main(void) {
         if (ahora - ultimaTelem >= TELEM_MS) {
             ultimaTelem = ahora;
             sprintf(texto, "t=%lu sp=%u y=%u u=%u\r\n",
-                    ahora, setpoint, y, ventilador_getDuty());
+                    ahora, (uint16_t)(spActual + 0.5f), y, ventilador_getDuty());
             comunicacion_enviarTexto(texto);
         }
 
@@ -180,6 +228,27 @@ int main(void) {
  * Versiones anteriores del main (desactivadas con #if 0)
  * ------------------------------------------------------------------------- */
 #if 0
+/* prueba del LED (P0.22), para verificar que la placa graba bien */
+#include "LPC17xx.h"
+#include "lpc17xx_gpio.h"
+
+#define LED_PIN  (1UL << 22)      // LED rojo de la LPCXpresso: P0.22
+
+static void esperar(volatile uint32_t n) {
+    while (n--) { }
+}
+
+int main(void) {
+    // P0.22 ya arranca como GPIO (función 00 de PINSEL): solo hay que hacerlo salida
+    GPIO_SetDir(PORT_0, LED_PIN, GPIO_OUTPUT);
+
+    while (1) {
+        GPIO_TogglePins(PORT_0, LED_PIN);   // si estaba prendido lo apaga, y al revés
+        esperar(3000000);                   // ~medio segundo
+    }
+    return 0;
+}
+
 
 #include "LPC17xx.h"
 #include "ventilador.h"

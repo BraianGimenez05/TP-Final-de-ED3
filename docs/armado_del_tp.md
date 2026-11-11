@@ -337,15 +337,23 @@ Se miden cuatro parámetros: u0, Kf, α y τ. La masa de la pelota, su diámetro
 
 Antes de cualquier otra medición se calibra el Sharp, ubicando la pelota a alturas conocidas cada 5 cm y registrando el valor del ADC (promedio de varias lecturas). La curva no es lineal, por lo que se usa una tabla con interpolación lineal entre puntos.
 
-| Altura [cm] | Valor ADC | Tensión [mV] |
-|---|---|---|
-| 10 | | |
-| 15 | | |
-| 20 | | |
-| 25 | | |
-| 30 | | |
-| 35 | | |
-| 40 | | |
+Medición del 11/11/2026, con el ventilador apagado y la pelota sostenida con un hilo (altura de la parte inferior de la pelota, medida desde la rejilla). Cada valor es la mediana de 30 a 60 s de lecturas del ADC + DMA.
+
+| Altura [cm] | Valor ADC | Tensión [mV] | Ruido (desvío) | Sensibilidad [cuentas/cm] |
+|---|---|---|---|---|
+| 0 | 1356 | 1093 | 14 | — |
+| 10 | 1566 | 1262 | 13 | 21 |
+| 15 | 1797 | 1448 | 16 | 46 |
+| 20 | 2040 | 1644 | 21 | 49 |
+| 25 | 2287 | 1843 | 24 | 49 |
+| 30 | 2525 | 2035 | 18 | 48 |
+| 35 | 2693 | 2170 | 19 | 34 |
+| 40 | 2638 | 2126 | 22 | −11 |
+
+- Entre 10 y 30 cm la relación es prácticamente lineal (~48 cuentas/cm, 4,8 cuentas/mm).
+- Por debajo de 10 cm el sensor no distingue bien la pelota: con la pelota sobre la rejilla mide el reflejo de las paredes.
+- Entre 35 y 40 cm la curva se invierte (zona ciega del Sharp). Si la pelota sube por encima de ~35 cm, el sensor indica una altura menor a la real. Por eso el setpoint se limita a 100–300 mm en el firmware.
+- El firmware convierte la lectura a mm con interpolación lineal entre los puntos de 0 a 35 cm (`sensor_aMm` en `sensor.c`).
 
 ### Parámetros
 

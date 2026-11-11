@@ -31,7 +31,7 @@ SIMULADOR = "SIMULADOR"
 VENTANA_S = 30      # segundos visibles en el gráfico
 RE_TELEM = re.compile(r"t=(\d+) sp=(\d+) y=(\d+) u=(\d+)")
 PAUSA_ENTRE_CMD_MS = 150
-RE_PARAM = re.compile(r"SP=(\d+) u0=(\d+) Kp=(-?\d+) Ki=(-?\d+) Kd=(-?\d+).*modo=(\w+)")
+RE_PARAM = re.compile(r"SP=(\d+) u0=(\d+) Kp=(-?\d+) Ki=(-?\d+) Kd=(-?\d+).*?(?:R=(\d+) )?modo=(\w+)")
 # Los ensayos se guardan en docs/ensayos/ del repo, sin importar desde dónde se ejecute
 CARPETA_ENSAYOS = Path(__file__).resolve().parent.parent / "docs" / "ensayos"
 
@@ -129,7 +129,7 @@ class Dashboard(tk.Tk):
         self.linea_sp, = self.ax_y.plot([], [], label="Setpoint", color="tab:orange", linestyle="--")
         self.linea_u, = self.ax_u.plot([], [], label="Duty (u)", color="tab:green")
 
-        self.ax_y.set_ylabel("Altura [cuentas ADC]")
+        self.ax_y.set_ylabel("Altura [mm]")
         self.ax_u.set_ylabel("Duty [‰]")
         self.ax_u.set_xlabel("Tiempo [s]")
         self.ax_y.legend(loc="upper left")
@@ -159,7 +159,7 @@ class Dashboard(tk.Tk):
         fila.pack(fill=tk.X, pady=2)
         ttk.Label(fila, text="Duty manual [‰]").pack(side=tk.LEFT)
         self.ent_duty = ttk.Entry(fila, width=7)
-        self.ent_duty.insert(0, "345")
+        self.ent_duty.insert(0, "505")
         self.ent_duty.pack(side=tk.LEFT, padx=4)
         ttk.Button(fila, text="Aplicar", command=self._aplicar_duty).pack(side=tk.LEFT)
 
@@ -167,11 +167,12 @@ class Dashboard(tk.Tk):
         params = ttk.LabelFrame(padre, text="Parámetros del PID", padding=6)
         params.pack(fill=tk.X)
         self.entradas = {}
-        campos = [("S", "Setpoint [cuentas]", "1916"),
-                  ("P", "Kp × 1000", "20"),
-                  ("I", "Ki × 1000", "3"),
-                  ("K", "Kd × 1000", "24"),
-                  ("U", "u0 [‰]", "345")]
+        campos = [("S", "Setpoint [mm]", "175"),
+                  ("P", "Kp × 1000", "300"),
+                  ("I", "Ki × 1000", "20"),
+                  ("K", "Kd × 1000", "360"),
+                  ("U", "u0 [‰]", "505"),
+                  ("R", "Rampa [mm/s]", "20")]
         for fila_n, (letra, texto, defecto) in enumerate(campos):
             ttk.Label(params, text=texto).grid(row=fila_n, column=0, sticky=tk.W, pady=1)
             ent = ttk.Entry(params, width=8)
@@ -179,9 +180,9 @@ class Dashboard(tk.Tk):
             ent.grid(row=fila_n, column=1, padx=4)
             self.entradas[letra] = ent
         ttk.Button(params, text="Aplicar parámetros", command=self._aplicar_parametros).grid(
-            row=5, column=0, columnspan=2, sticky=tk.EW, pady=(6, 0))
+            row=len(campos), column=0, columnspan=2, sticky=tk.EW, pady=(6, 0))
         ttk.Button(params, text="Leer de la LPC (?)", command=lambda: self._encolar("?")).grid(
-            row=6, column=0, columnspan=2, sticky=tk.EW, pady=2)
+            row=len(campos) + 1, column=0, columnspan=2, sticky=tk.EW, pady=2)
 
     def _armar_consola(self, padre):
         marco = ttk.LabelFrame(padre, text="Consola", padding=6)
@@ -286,7 +287,7 @@ class Dashboard(tk.Tk):
             valor = self._entero(ent, letra)
             if valor is None:
                 return
-            self._encolar(f"{letra}{valor}")       # S1916, P20, I3, K24, U345
+            self._encolar(f"{letra}{valor}")       # S175, P300, I20, K360, U505
 
     def _procesar_rx(self):
         # Vacía la cola: procesa todas las líneas que llegaron desde la última vez
@@ -310,8 +311,10 @@ class Dashboard(tk.Tk):
         self.after(100, self._procesar_rx)      # se vuelve a llamar dentro de 100 ms
 
     def _cargar_parametros(self, grupos):
-        sp, u0, kp, ki, kd, modo = grupos
-        for letra, valor in zip("SUPIK", (sp, u0, kp, ki, kd)):
+        sp, u0, kp, ki, kd, rampa, modo = grupos
+        for letra, valor in zip("SUPIKR", (sp, u0, kp, ki, kd, rampa)):
+            if valor is None:                   # firmware viejo, sin rampa
+                continue
             self.entradas[letra].delete(0, tk.END)
             self.entradas[letra].insert(0, valor)
         self.lbl_modo.config(text=f"Modo: {modo}")
