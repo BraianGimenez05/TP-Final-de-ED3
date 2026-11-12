@@ -32,7 +32,7 @@ VENTANA_S = 30      # segundos visibles en el gráfico
 RE_TELEM = re.compile(r"t=(\d+) sp=(\d+) y=(\d+) u=(\d+)(?: a=(\d+))?")   # a: ADC crudo (opcional)
 PAUSA_ENTRE_CMD_MS = 150
 RE_PARAM = re.compile(r"SP=(\d+) u0=(\d+) Kp=(-?\d+) Ki=(-?\d+) Kd=(-?\d+).*?"
-                      r"(?:W=(\d+) F=(\d+) )?(?:R=(\d+) )?modo=(\w+)")
+                      r"(?:W=(\d+) F=(\d+) )?(?:R=(\d+) )?(?:C=(\d+) )?(?:B=(\d+) )?modo=(\w+)")
 # Los ensayos se guardan en docs/ensayos/ del repo, sin importar desde dónde se ejecute
 CARPETA_ENSAYOS = Path(__file__).resolve().parent.parent / "docs" / "ensayos"
 
@@ -181,7 +181,9 @@ class Dashboard(tk.Tk):
                   ("U", "u0 [‰]", "535"),
                   ("R", "Rampa [mm/s]", "20"),
                   ("W", "Perturbación [‰]", "0"),
-                  ("F", "Frec. pert. [0,1 Hz]", "5")]
+                  ("F", "Frec. pert. [0,1 Hz]", "5"),
+                  ("C", "Cuadrada [0,1 s]", "0"),
+                  ("B", "Alarma [mm]", "100")]
         for fila_n, (letra, texto, defecto) in enumerate(campos):
             ttk.Label(params, text=texto).grid(row=fila_n, column=0, sticky=tk.W, pady=1)
             ent = ttk.Entry(params, width=8)
@@ -324,8 +326,8 @@ class Dashboard(tk.Tk):
         self.after(100, self._procesar_rx)      # se vuelve a llamar dentro de 100 ms
 
     def _cargar_parametros(self, grupos):
-        sp, u0, kp, ki, kd, amp, frec, rampa, modo = grupos
-        for letra, valor in zip("SUPIKWFR", (sp, u0, kp, ki, kd, amp, frec, rampa)):
+        sp, u0, kp, ki, kd, amp, frec, rampa, cuad, banda, modo = grupos
+        for letra, valor in zip("SUPIKWFRCB", (sp, u0, kp, ki, kd, amp, frec, rampa, cuad, banda)):
             if valor is None:                   # firmware viejo, sin rampa
                 continue
             if self.focus_get() is self.entradas[letra]:

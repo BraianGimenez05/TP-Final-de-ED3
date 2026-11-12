@@ -5,6 +5,11 @@
  * al registro del DAC. El contador del DAC marca cada cuánto pide la muestra siguiente,
  * y eso fija la frecuencia. La salida AOUT (P0.26) maneja el buzzer a través del
  * seguidor, y el PID lee el valor actual del DAC para sumarlo al duty del ventilador.
+ *
+ * Modo cuadrada (comando C): el DMA se detiene y la interrupción del Timer1 escribe el DAC
+ * directamente, alternando entre el máximo y el mínimo cada medio período. Así la perturbación
+ * sube y baja de golpe, con un período de 0,2 a 60 s (la senoidal con DMA no baja de 0,4 Hz
+ * porque el contador del DAC es de 16 bits).
  */
 #include "perturbacion.h"
 #include "lpc17xx_dac.h"
@@ -16,6 +21,9 @@
 #define PCLK_DAC     25000000UL     // DAC_Init deja el reloj del DAC en CCLK / 4
 #define FREC_MIN     4              // 0,4 Hz: el contador del DAC es de 16 bits
 #define FREC_MAX     50             // 5 Hz
+#define CUAD_MIN     2              // 0,2 s
+#define CUAD_MAX     600            // 60 s
+#define DAC_MAX      1023           // salida del DAC: 0 a 1023 (10 bits)
 
 // Tabla y lista enlazada en la RAM2, igual que el buffer del sensor
 __attribute__((section(".bss.$RAM2"))) static uint32_t tabla[N_TABLA];
@@ -24,6 +32,10 @@ __attribute__((section(".bss.$RAM2"))) static GPDMA_LLI_T lli;
 static uint16_t amplitud   = 0;     // por mil
 static uint16_t frecuencia = 5;     // décimas de Hz (0,5 Hz)
 static uint8_t  inicializado = 0;   // si perturbacion_init no se llamó, no se toca el hardware
+
+static uint16_t periodoCuadrada = 0;   // décimas de s; 0 = modo senoidal
+static uint32_t msCuadrada = 0;        // tiempo transcurrido en el medio período actual
+static uint8_t  nivelAlto = 1;         // 1 = la cuadrada está arriba, 0 = abajo
 
 static void habilitarSalida(FunctionalState estado) {
     DAC_CONVERTER_CFG_T cfg = {
@@ -107,8 +119,43 @@ void perturbacion_setAmplitud(uint16_t permil) {
     if (amplitud == 0) {
         habilitarSalida(DISABLE);   // el DMA deja de recibir pedidos
         DAC_UpdateValue(0);         // salida en 0 V: el buzzer queda en silencio
+    } else if (periodoCuadrada > 0) {
+        habilitarSalida(DISABLE);   // cuadrada: el DAC lo escribe el Timer1, no el DMA
+        DAC_UpdateValue(nivelAlto ? DAC_MAX : 0);
     } else {
         habilitarSalida(ENABLE);
+    }
+}
+
+void perturbacion_setCuadrada(uint16_t dS) {
+    if (dS != 0 && dS < CUAD_MIN) dS = CUAD_MIN;
+    if (dS > CUAD_MAX) dS = CUAD_MAX;
+    periodoCuadrada = dS;
+    msCuadrada = 0;
+    nivelAlto = 1;                  // arranca con el salto hacia arriba
+    perturbacion_setAmplitud(amplitud);   // reconfigura la salida para el modo elegido
+}
+
+uint16_t perturbacion_getCuadrada(void) { return periodoCuadrada; }
+
+void perturbacion_alarma(uint8_t encendida) {
+    if (!inicializado || amplitud != 0) {
+        return;                     // con perturbación, la salida del DAC es de la perturbación
+    }
+    // Con amplitud 0 el DMA está detenido y perturbacion_valor() devuelve 0, así que escribir
+    // el DAC no cambia el duty: solo prende o apaga el buzzer
+    DAC_UpdateValue(encendida ? DAC_MAX : 0);
+}
+
+void perturbacion_tick(uint16_t ms) {
+    if (!inicializado || periodoCuadrada == 0 || amplitud == 0) {
+        return;
+    }
+    msCuadrada += ms;
+    if (msCuadrada >= (uint32_t)periodoCuadrada * 50) {    // medio período: décimas de s × 100 / 2
+        msCuadrada = 0;
+        nivelAlto = !nivelAlto;
+        DAC_UpdateValue(nivelAlto ? DAC_MAX : 0);           // salto de golpe
     }
 }
 

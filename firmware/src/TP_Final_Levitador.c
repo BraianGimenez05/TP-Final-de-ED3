@@ -23,6 +23,7 @@
 #define SP_MAX       300
 
 #define Y_DESPEGUE   50      // [mm] por encima de esta altura se considera que la pelota despegó
+#define HISTERESIS   20      // [mm] la alarma se apaga recién cuando el error baja 20 mm de la banda
 
 // Parámetros del controlador (se pueden cambiar por UART).
 // Valores ajustados en el equipo el 11/11/2026 (ensayo 16:18: ±6,8 mm en régimen,
@@ -34,6 +35,7 @@ static float    Kd = 0.250f;    // por mil · s por mm
 static float    Tf = 0.10f;     // filtro de la derivada [s]: con 0,10 el ruido del sensor mueve menos el duty
 static uint16_t u0 = 535;       // duty de equilibrio (por mil); se cambia con el comando U
 static uint16_t setpoint = 200; // altura deseada [mm desde la rejilla]
+static uint16_t bandaAlarma = 100; // [mm] el buzzer suena si la pelota se aleja más que esto del setpoint; 0 = alarma apagada
 static uint16_t rampa = 20;     // velocidad con que se mueve el setpoint [mm/s]; 0 = salto directo
 static volatile float spActual = 200; // setpoint que sigue el PID: avanza hacia "setpoint" a la velocidad "rampa"
 
@@ -57,15 +59,17 @@ static void mostrarAyuda(void) {
     comunicacion_enviarTexto("  Rxx    rampa del setpoint en mm/s (0 = salto)\r\n");
     comunicacion_enviarTexto("  Wxx    perturbacion senoidal (DAC), amplitud en por mil (0 = apagada)\r\n");
     comunicacion_enviarTexto("  Fxx    frecuencia de la perturbacion en decimas de Hz (4-50)\r\n");
+    comunicacion_enviarTexto("  Cxxx   perturbacion cuadrada, periodo en decimas de s (2-600, 0 = senoidal)\r\n");
+    comunicacion_enviarTexto("  Bxxx   alarma: buzzer si el error supera xxx mm (0 = apagada)\r\n");
     comunicacion_enviarTexto("  ?      parametros actuales\r\n");
 }
 
 static void mostrarParametros(void) {
     char texto[128];
-    sprintf(texto, "SP=%u u0=%u Kp=%d Ki=%d Kd=%d (x1000) W=%u F=%u R=%u modo=%s\r\n",
+    sprintf(texto, "SP=%u u0=%u Kp=%d Ki=%d Kd=%d (x1000) W=%u F=%u R=%u C=%u B=%u modo=%s\r\n",
             setpoint, u0, (int)(Kp * 1000), (int)(Ki * 1000), (int)(Kd * 1000),
             perturbacion_getAmplitud(), perturbacion_getFrecuencia(),
-            rampa, automatico ? "AUTO" : "MANUAL");
+            rampa, perturbacion_getCuadrada(), bandaAlarma, automatico ? "AUTO" : "MANUAL");
     comunicacion_enviarTexto(texto);
 }
 
@@ -171,10 +175,31 @@ static void timerControl_init(void) {
     TIM_Enable(LPC_TIM1);
 }
 
+// Alarma: el buzzer suena mientras la pelota está a más de bandaAlarma mm del setpoint.
+// Solo en automático y una vez que la pelota despegó (mientras sube desde la rejilla el error es
+// grande a propósito). Con histéresis, para que no titile cuando el error está justo en el borde.
+static void revisarAlarma(uint16_t y) {
+    static uint8_t sonando = 0;
+    float error = spActual - (float)y;
+    if (error < 0) error = -error;
+
+    if (!automatico || despegando || bandaAlarma == 0) {
+        sonando = 0;
+    } else if (!sonando && error > bandaAlarma) {
+        sonando = 1;
+    } else if (sonando && error < (float)(bandaAlarma > 2 * HISTERESIS ? bandaAlarma - HISTERESIS
+                                                                        : bandaAlarma / 2)) {
+        sonando = 0;
+    }
+    perturbacion_alarma(sonando);
+}
+
 // Lazo de control: lee el promedio que dejó el DMA, lo pasa a mm y, en modo automático,
 // calcula el PID y actualiza el PWM
 void TIMER1_IRQHandler(void) {
     TIM_ClearIntPending(LPC_TIM1, TIM_MR0_INT);
+
+    perturbacion_tick(TS_MS);       // en modo cuadrada, cambia el nivel del DAC cada medio período
 
     uint16_t adc = sensor_leer();
     uint16_t y   = sensor_aMm(adc);
@@ -184,6 +209,8 @@ void TIMER1_IRQHandler(void) {
     if (automatico) {
         pasoPID(y);
     }
+
+    revisarAlarma(y);
 }
 
 static void atenderComando(void) {
@@ -240,6 +267,15 @@ static void atenderComando(void) {
             break;
         case 'F': case 'f':
             perturbacion_setFrecuencia(valor);
+            mostrarParametros();
+            break;
+        case 'C': case 'c':
+            perturbacion_setCuadrada(valor);
+            mostrarParametros();
+            break;
+        case 'B': case 'b':
+            if (valor > 300) valor = 300;
+            bandaAlarma = valor;
             mostrarParametros();
             break;
         case '?':

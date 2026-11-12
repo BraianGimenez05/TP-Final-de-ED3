@@ -36,7 +36,8 @@ Desde un dashboard en Python en la PC, comunicado por UART, el usuario fija el s
   * Mantener la esfera en una altura de consigna mediante un PID periódico (período de 40 ms, disparado por la interrupción del Timer1) que actúa sobre el ventilador por PWM.
   * Recibir por UART el setpoint, las constantes Kp, Ki, Kd, el duty de equilibrio, la velocidad de rampa y los parámetros de la perturbación, y enviar telemetría (tiempo, setpoint, altura, duty y lectura del ADC).
   * Compensar perturbaciones externas: desplazamientos de la esfera, corrientes de aire y variaciones del punto de equilibrio del ventilador.
-  * Generar con el DAC + DMA una perturbación senoidal de amplitud y frecuencia configurables (0,4 a 5 Hz), que se suma al duty del ventilador para estudiar el rechazo de perturbaciones. La misma señal sale por AOUT y maneja un buzzer como indicador.
+  * Generar con el DAC una perturbación que se suma al duty del ventilador para estudiar el rechazo de perturbaciones: senoidal (DAC + DMA, 0,4 a 5 Hz) o cuadrada (saltos de golpe, período de 0,2 a 60 s), con amplitud configurable. La salida AOUT maneja un buzzer que suena al ritmo de la perturbación.
+  * Avisar con el buzzer cuando la esfera se aleja del setpoint más de una banda configurable (100 mm por defecto), si la perturbación está apagada.
 * Fuera de alcance:
   * Conectividad inalámbrica (Wi-Fi / Bluetooth).
   * Almacenamiento de datos en el propio equipo (tarjeta SD o memoria flash). Los ensayos se registran en la PC a través de la UART.
@@ -82,8 +83,10 @@ Desde un dashboard en Python en la PC, comunicado por UART, el usuario fija el s
 | `Uxxx` | Duty de equilibrio u0, en por mil | `U535` | línea de parámetros |
 | `Rxx` | Velocidad de la rampa del setpoint, en mm/s (0 = el setpoint cambia de golpe). Máximo 200 | `R20` | línea de parámetros |
 | `Wxx` | Amplitud de la perturbación senoidal del DAC, en ‰ de duty (0 = apagada). Máximo 200. Se suma al duty solo en modo automático | `W50` | línea de parámetros |
-| `Fxx` | Frecuencia de la perturbación, en décimas de Hz (4–50, es decir 0,4 a 5 Hz) | `F10` | línea de parámetros |
-| `?` | Consulta los parámetros actuales | `?` | `SP=200 u0=535 Kp=300 Ki=30 Kd=250 (x1000) W=0 F=5 R=20 modo=AUTO` |
+| `Fxx` | Frecuencia de la perturbación senoidal, en décimas de Hz (4–50, es decir 0,4 a 5 Hz) | `F10` | línea de parámetros |
+| `Cxxx` | Perturbación cuadrada: período en décimas de segundo (2–600, es decir 0,2 a 60 s). `C0` vuelve a la senoidal | `C200` | línea de parámetros |
+| `Bxxx` | Alarma: el buzzer suena si la esfera se aleja del setpoint más de `xxx` mm (0 = alarma apagada, máximo 300). Solo con la perturbación apagada | `B100` | línea de parámetros |
+| `?` | Consulta los parámetros actuales | `?` | `SP=200 u0=535 Kp=300 Ki=30 Kd=250 (x1000) W=0 F=5 R=20 C=0 B=100 modo=AUTO` |
 | (otro) | Comando no reconocido | `X` | lista de comandos |
 
 Los parámetros modificados por UART se pierden al reiniciar la placa; los valores por defecto están en el firmware.
@@ -110,6 +113,57 @@ A 9600 baudios cada línea tarda ~37 ms en transmitirse; por eso la telemetría 
 
 ## 3. Arquitectura del Sistema
 
+### Diagrama de Bloques
+
+```mermaid
+flowchart LR
+    subgraph PC["PC"]
+        DASH["Dashboard Python<br/>gráfico, parámetros, CSV"]
+    end
+
+    subgraph LPC["LPC1769"]
+        UART["UART0<br/>comandos y telemetría"]
+        ADC["ADC burst<br/>AD0.0"]
+        DMA0["GPDMA canal 0<br/>buffer circular de 64 muestras"]
+        T1["Timer1<br/>interrupción cada 40 ms"]
+        PID["PID<br/>rampa, anti-windup,<br/>derivada filtrada"]
+        PWM["PWM1.1<br/>500 Hz"]
+        DMA1["GPDMA canal 1<br/>tabla senoidal"]
+        DAC["DAC<br/>AOUT"]
+    end
+
+    subgraph SENSOR["Medición"]
+        SHARP["Sensor IR<br/>Sharp GP2Y0A21"]
+        FILT["Filtro Sallen-Key<br/>LM358 + zener"]
+    end
+
+    subgraph POT["Potencia (12 V aislado)"]
+        OPTO["Optoacoplador<br/>PC817"]
+        MOS["MOSFET<br/>IRLZ44N"]
+        FAN["Ventilador 12 V"]
+    end
+
+    subgraph IND["Indicador"]
+        SEG["Seguidor<br/>LM358"]
+        Q["Transistor NPN"]
+        BUZ["Buzzer"]
+    end
+
+    BALL(("Pelota<br/>en el tubo"))
+
+    DASH <-->|"USB-UART CP2102"| UART
+    UART --> PID
+    SHARP --> FILT --> ADC --> DMA0 --> T1
+    T1 --> PID --> PWM --> OPTO --> MOS --> FAN
+    FAN -->|"flujo de aire"| BALL
+    BALL -->|"luz IR reflejada"| SHARP
+    DMA1 --> DAC
+    T1 -->|"cuadrada y alarma"| DAC
+    DAC -->|"perturbación"| PID
+    DAC --> SEG --> Q --> BUZ
+    PID -->|"telemetría"| UART
+```
+
 ### Hardware & Interconexión
 
 ```text
@@ -122,6 +176,12 @@ A 9600 baudios cada línea tarda ~37 ms en transmitirse; por eso la telemetría 
                  │   tabla ──DMA──► DAC ────┼──► Seguidor (LM358) ──► Transistor ──► Buzzer
                  └──────────────────────────┘
 ```
+
+#### Diagrama esquemático
+
+![Esquemático del circuito](docs/img/esquematico.png)
+
+El circuito se divide en cuatro bloques: la etapa de potencia aislada con el optoacoplador (1), el sensor con el filtro Sallen-Key y la protección de la entrada del ADC (2), la salida del DAC con el seguidor, el transistor y el buzzer (3), y la comunicación con la PC junto con la alimentación de 5 V (4). La masa del lado de 12 V está separada de la masa de la LPC.
 
 | Señal | Pin LPC1769 | Conector LPCXpresso |
 |---|---|---|
@@ -137,7 +197,7 @@ A 9600 baudios cada línea tarda ~37 ms en transmitirse; por eso la telemetría 
   * Acondicionamiento: filtro pasa-bajos activo Sallen-Key de ~16 Hz (R = 10 kΩ, C = 1 µF) con un LM358 como seguidor. Como el LM358 se alimenta a 5 V, la salida pasa por una resistencia de 1 kΩ y un zener de 3,3 V que limitan la tensión en la entrada del ADC.
   * Actuador: ventilador de 12 V / 0,26 A conmutado por un MOSFET de nivel lógico (IRLZ44N), con pull-down de 10 kΩ en el gate y diodo 1N4007 en antiparalelo con la carga.
   * Aislación: un optoacoplador PC817 separa la LPC (3,3 V) del circuito de 12 V. Las masas de ambos lados no están unidas. La velocidad del optoacoplador limita el PWM a 500 Hz.
-  * Indicador de la perturbación: la salida del DAC pasa por la otra mitad del LM358, conectada como seguidor para no cargar el pin AOUT, y a través de una resistencia de 1 kΩ maneja la base de un transistor NPN que enciende un buzzer alimentado a 5 V.
+  * Indicador (perturbación y alarma): la salida del DAC pasa por la otra mitad del LM358, conectada como seguidor para no cargar el pin AOUT, y a través de una resistencia de 1 kΩ maneja la base de un transistor NPN que enciende un buzzer alimentado a 5 V. P0.26 arranca con el pull-up interno activado, por lo que el buzzer suena hasta que el firmware inicializa el DAC y deja la salida en 0 V.
   * Alimentación: fuente de 12 V / 2 A para el ventilador; la LPC1769 por USB; el sensor, el operacional y el buzzer con los 5 V del adaptador USB-UART.
   * Ver [docs/notas_diseno.md](docs/notas_diseno.md) para las decisiones de diseño, [docs/armado_del_tp.md](docs/armado_del_tp.md) para el armado y [hardware/Materiales.md](hardware/Materiales.md) para la lista de materiales.
 
@@ -147,18 +207,25 @@ A 9600 baudios cada línea tarda ~37 ms en transmitirse; por eso la telemetría 
   * `comunicacionUart` — UART0 a 9600 8N1 con FIFO, recepción de comandos por interrupción.
   * `sensor` — ADC en modo burst (AD0.0, P0.23, ~1500 muestras/s) con GPDMA en un buffer circular de 64 muestras (~43 ms, un ciclo del sensor). La lectura es el promedio del buffer, convertido a mm con la tabla de calibración. El buffer está en la RAM AHB (RAM2).
   * `demora` — Timer0 contando en µs, como base de tiempo de la telemetría y de las demoras.
-  * `perturbacion` — DAC con GPDMA (canal 1, memoria → DAC): una tabla de 1024 muestras con un período de senoidal se repite sin intervención de la CPU, y el contador del DAC fija la frecuencia. El PID lee el valor actual del DAC y lo suma al duty, multiplicado por la amplitud.
-  * Timer1 — interrupción por match cada 40 ms, que ejecuta el lazo de control.
+  * `perturbacion` — salida del DAC, con tres modos:
+    * Senoidal: GPDMA canal 1 (memoria → DAC). Una tabla de 1024 muestras con un período de senoidal se repite sin intervención de la CPU, y el contador del DAC fija la frecuencia. Como el contador es de 16 bits, la frecuencia mínima es 0,4 Hz.
+    * Cuadrada: el DMA se detiene y la interrupción del Timer1 escribe el DAC directamente, alternando entre el máximo y el mínimo cada medio período. Así se logran períodos de hasta 60 s, necesarios para ver cómo el PID corrige cada salto.
+    * Alarma: con la perturbación apagada, la salida queda en alto (buzzer sonando) mientras la esfera está fuera de la banda, y en 0 V el resto del tiempo.
+
+    En los dos modos de perturbación, el PID lee el valor actual del DAC, lo lleva al rango −1..1 y lo suma al duty multiplicado por la amplitud. Con la perturbación apagada ese término es 0, por lo que la alarma no modifica el duty.
+  * Timer1 — interrupción por match cada 40 ms. En cada una: avanza la perturbación cuadrada, lee la altura, ejecuta el PID y revisa la alarma.
 * Lazo de control (cada 40 ms):
 
 ```text
 leer altura (mm) ──► rampa del setpoint ──► e = setpoint − altura
                                                 │
-        duty = u0 + Kp·e + I + D + W·seno  ◄────┘
+        duty = u0 + Kp·e + I + D + W·p  ◄───────┘
         │   I: integral con anti-windup (no acumula si el duty está saturado)
         │   D: derivada sobre la medición, filtrada (Tf = 0,1 s)
-        │   W·seno: perturbación del DAC (0 si está apagada)
+        │   W·p: perturbación del DAC, p entre −1 y 1 (senoidal o cuadrada; 0 si está apagada)
         └──► limitar a 150–650 ‰ ──► PWM del ventilador
+                    │
+                    └──► alarma: |e| > banda ──► buzzer (con histéresis de 20 mm)
 ```
 
 * Lazo de control: la interrupción del Timer1 (match 0, cada 40 ms) lee el promedio del ADC que dejó el DMA, lo convierte a mm y, en modo automático, calcula el PID y actualiza el PWM. Como el período lo marca el hardware, no se ve afectado por lo que haga el programa principal (por ejemplo, la espera mientras sale una línea por la UART).
@@ -246,6 +313,8 @@ El seguimiento semanal del equipo está en la carpeta [scrum/](scrum/).
     |---|---|---|---|---|---|---|---|---|---|
     | ADC | 1820 | 1972 | 2038 | 2157 | 2307 | 2442 | 2593 | 2731 | 2761 |
 
+    ![Curva del sensor](docs/img/curva_sensor.png)
+
     Entre 0 y 35 cm la curva es aproximadamente lineal (~27 cuentas/cm) y el ruido de la medición es de ±1,3 cm. Entre 35 y 40 cm la lectura casi no cambia (límite del sensor), por lo que el setpoint se limita a 10–30 cm. La calibración se repitió el 12/11 porque, después de los cambios en el acondicionamiento, la tabla anterior indicaba la pelota varios centímetros más arriba de su posición real; para registrar los valores del ADC se agregó el campo `a=` a la telemetría.
 * Ensayos del 11/11, con la calibración anterior (u0 = 50,5 %, Kp = 0,30, Ki = 0,020, Kd = 0,36, en ‰ por mm; PID en el programa principal):
   * Regulación (setpoint 175 mm): altura media 175,5 mm y desvío estándar 6,8 mm. La esfera permanece el 87 % del tiempo dentro de ±1 cm y el 99 % dentro de ±2 cm.
@@ -256,6 +325,11 @@ El seguimiento semanal del equipo está en la carpeta [scrum/](scrum/).
   * Ajuste de Kd (setpoint 200 mm): con Kd = 0,36 el desvío fue de 19,3 mm (75 % del tiempo dentro de ±2 cm); con Kd = 0,25, 15,1 mm (84 %); con Kd = 0,18, 18,4 mm (75 %). Se adoptó Kd = 0,25: el duty varía menos entre muestras y la derivada todavía amortigua el movimiento de la esfera.
   * Arranque con la esfera apoyada en la rejilla (setpoint 200 mm): antes de los cambios en el arranque, la esfera subía hasta el tope (350 mm) y tardaba ~30 s en estabilizarse. Con la rampa desde la altura real y el reset de la integral al despegar, el máximo fue de 263 mm y se estabilizó en ~15 s.
   * Regulación (setpoint 200 mm): altura media 195 mm y desvío estándar 20,2 mm. La esfera permanece el 36 % del tiempo dentro de ±1 cm y el 67 % dentro de ±2 cm.
+  * Duty del PWM en función del error (setpoint − altura), medido en los ensayos de regulación y de escalón:
+
+    ![Duty en función del error](docs/img/duty_vs_error.png)
+
+    La recta es el aporte del término proporcional solo (u0 + Kp·e). Los puntos se reparten alrededor de ella por los términos integral y derivativo: la integral desplaza el duty según el error acumulado y la derivada lo corrige según la velocidad de la esfera, por eso para un mismo error el duty puede variar ±50 ‰. El duty llegó al límite superior (650 ‰) solo en tres muestras, con errores de 60 a 90 mm durante el escalón; el límite inferior (150 ‰) no se alcanzó.
   * Escalón de 10 cm con rampa (150 → 250 → 150 mm): en la subida la esfera sigue la rampa con una diferencia de ~2 cm, queda dentro de ±2 cm a los 5,7 s y llega a un máximo de 274 mm (+24 mm). En la bajada desciende hasta 105 mm (−45 mm) y no se mantiene dentro de ±2 cm, porque a 150 mm la regulación es peor (desvío de 34 mm con el setpoint fijo).
   * Escalón de 10 cm con rampa (200 → 300 → 200 mm): la esfera se atrasa respecto de la rampa, la integral acumula ese atraso y luego se pasa: llega a 350 mm al subir y a 103 mm al bajar. Cerca de 300 mm el sensor está próximo a su límite de medición.
   * Perturbación senoidal con el DAC (W = 50 ‰, setpoint 200 mm). La amplitud de la oscilación de la esfera se obtuvo de la componente de la altura a la frecuencia de la perturbación:
@@ -294,6 +368,7 @@ El seguimiento semanal del equipo está en la carpeta [scrum/](scrum/).
 ├── pc/                # Dashboard en Python
 ├── hardware/          # Lista de materiales
 ├── docs/              # Modelo y diseño del PID, guía de armado, notas de diseño
+│   ├── img/           # Esquemático, fotos y gráficos del README
 │   └── ensayos/       # Registros de los ensayos (CSV)
 ├── scrum/             # Weekly, review y retrospectiva del equipo
 └── README.md
