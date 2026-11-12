@@ -2,8 +2,8 @@
 #include "lpc17xx_pwm.h"
 
 #define PWM_CLK_HZ   25000000U                  // PCLK del PWM = 100 MHz / 4
-#define PWM_FREQ_HZ  500U                     // 20 kHz: no se escucha
-#define PWM_PERIODO  (PWM_CLK_HZ / PWM_FREQ_HZ) // 1250 cuentas
+#define PWM_FREQ_HZ  500U                       // 500 Hz: el optoacoplador PC817 no conmuta bien más rápido
+#define PWM_PERIODO  (PWM_CLK_HZ / PWM_FREQ_HZ) // 50000 cuentas = 2 ms
 
 static uint16_t dutyActual = 0;
 
@@ -16,7 +16,7 @@ void ventilador_init(void) {
         .channel    = PWM_MATCH_0,
         .intEn      = DISABLE,
         .stopEn     = DISABLE,
-        .resetEn    = ENABLE,          // al llegar a 1250, vuelve a 0
+        .resetEn    = ENABLE,          // al llegar a PWM_PERIODO, vuelve a 0
         .matchValue = PWM_PERIODO
     };
     PWM_MATCHCFG_T ancho = {           // MR1: fija cuánto tiempo está en 1

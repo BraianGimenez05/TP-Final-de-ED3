@@ -337,23 +337,25 @@ Se miden cuatro parámetros: u0, Kf, α y τ. La masa de la pelota, su diámetro
 
 Antes de cualquier otra medición se calibra el Sharp, ubicando la pelota a alturas conocidas cada 5 cm y registrando el valor del ADC (promedio de varias lecturas). La curva no es lineal, por lo que se usa una tabla con interpolación lineal entre puntos.
 
-Medición del 11/11/2026, con el ventilador apagado y la pelota sostenida con un hilo (altura de la parte inferior de la pelota, medida desde la rejilla). Cada valor es la mediana de 30 a 60 s de lecturas del ADC + DMA.
+Medición del 12/11/2026, con el ventilador apagado y la pelota sostenida a alturas conocidas (altura de la parte inferior de la pelota, medida desde la rejilla). Cada valor de ADC es el promedio de 30 a 60 s de lecturas del ADC + DMA, enviadas en la telemetría (campo `a=`). La tensión se midió con el tester en P0.23.
 
-| Altura [cm] | Valor ADC | Tensión [mV] | Ruido (desvío) | Sensibilidad [cuentas/cm] |
+| Altura [cm] | Valor ADC | Tensión (tester) [V] | Ruido (desvío) [cuentas] | Sensibilidad [cuentas/cm] |
 |---|---|---|---|---|
-| 0 | 1356 | 1093 | 14 | — |
-| 10 | 1566 | 1262 | 13 | 21 |
-| 15 | 1797 | 1448 | 16 | 46 |
-| 20 | 2040 | 1644 | 21 | 49 |
-| 25 | 2287 | 1843 | 24 | 49 |
-| 30 | 2525 | 2035 | 18 | 48 |
-| 35 | 2693 | 2170 | 19 | 34 |
-| 40 | 2638 | 2126 | 22 | −11 |
+| 0 | 1820 | 1,42 | 36 | — |
+| 5 | 1972 | 1,53 | 33 | 30 |
+| 10 | 2038 | 1,60 | 32 | 13 |
+| 15 | 2157 | 1,68 | 32 | 24 |
+| 20 | 2307 | 1,80 | 37 | 30 |
+| 25 | 2442 | 1,91 | 37 | 27 |
+| 30 | 2593 | 2,03 | 31 | 30 |
+| 35 | 2731 | 2,16 | 36 | 28 |
+| 40 | 2761 | 2,17 | 36 | 6 |
 
-- Entre 10 y 30 cm la relación es prácticamente lineal (~48 cuentas/cm, 4,8 cuentas/mm).
-- Por debajo de 10 cm el sensor no distingue bien la pelota: con la pelota sobre la rejilla mide el reflejo de las paredes.
-- Entre 35 y 40 cm la curva se invierte (zona ciega del Sharp). Si la pelota sube por encima de ~35 cm, el sensor indica una altura menor a la real. Por eso el setpoint se limita a 100–300 mm en el firmware.
-- El firmware convierte la lectura a mm con interpolación lineal entre los puntos de 0 a 35 cm (`sensor_aMm` en `sensor.c`).
+- La calibración anterior (11/11/2026) quedó desplazada después de los cambios en el circuito de acondicionamiento: con la tabla vieja, la pelota se leía varios centímetros más arriba de su posición real. Por eso se repitió la medición.
+- El ADC indica ~60 cuentas (~50 mV) más que el tester en todos los puntos. La tabla usa los valores del ADC, que son los que ve el firmware.
+- Entre 0 y 35 cm la relación es aproximadamente lineal, con ~27 cuentas/cm. El ruido de ~35 cuentas equivale a ±1,3 cm.
+- Entre 35 y 40 cm la lectura casi no cambia: el sensor ya no distingue la altura. El setpoint se limita a 100–300 mm en el firmware.
+- El firmware convierte la lectura a mm con interpolación lineal entre los puntos de 0 a 35 cm, cada 5 cm (`sensor_aMm` en `sensor.c`).
 
 ### Parámetros
 

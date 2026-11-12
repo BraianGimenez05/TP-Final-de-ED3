@@ -72,11 +72,12 @@ uint16_t sensor_leer(void) {
     return validas ? (uint16_t)(suma / validas) : 0;
 }
 
-// Calibración del Sharp (11/11/2026): altura de la pelota desde la rejilla [mm] y lectura del ADC.
-// Por encima de 350 mm la curva se da vuelta (zona ciega del sensor): no se usa.
-#define N_PUNTOS 7
-static const uint16_t calMm[N_PUNTOS]  = {   0,  100,  150,  200,  250,  300,  350 };
-static const uint16_t calAdc[N_PUNTOS] = { 1356, 1566, 1797, 2040, 2287, 2525, 2693 };
+// Calibración del Sharp (12/11/2026): altura de la pelota desde la rejilla [mm] y lectura del ADC
+// (promedio de ~30 s por punto, ventilador apagado). Entre 350 y 400 mm la lectura casi no cambia
+// (2731 -> 2761): por encima de 350 mm el sensor ya no distingue la altura y no se usa.
+#define N_PUNTOS 8
+static const uint16_t calMm[N_PUNTOS]  = {   0,   50,  100,  150,  200,  250,  300,  350 };
+static const uint16_t calAdc[N_PUNTOS] = { 1820, 1972, 2038, 2157, 2307, 2442, 2593, 2731 };
 
 uint16_t sensor_aMm(uint16_t adc) {
     uint8_t i;

@@ -9,11 +9,12 @@
 #include "sensor.h"
 #include "demora.h"
 #include "perturbacion.h"
+#include "lpc17xx_timer.h"
 #include <stdio.h>
 #include <stdlib.h>
 
-#define TS_MS        40      // período del lazo: 40 ms (lo que tarda el Sharp en actualizar)
-#define TELEM_MS     200     // una línea cada 200 ms: a 9600 baudios cada línea tarda ~33 ms en salir
+#define TS_MS        40      // período del lazo: 40 ms (lo que tarda el Sharp en actualizar), marcado por el Timer1
+#define TELEM_MS     200     // una línea cada 200 ms: a 9600 baudios cada línea tarda ~37 ms en salir
 
 #define U_MIN        150     // límites del duty en modo automático (por mil)
 #define U_MAX        650
@@ -21,22 +22,30 @@
 #define SP_MIN       100     // límites del setpoint [mm]: fuera de este rango el sensor no mide bien
 #define SP_MAX       300
 
+#define Y_DESPEGUE   50      // [mm] por encima de esta altura se considera que la pelota despegó
+
 // Parámetros del controlador (se pueden cambiar por UART).
 // Valores ajustados en el equipo el 11/11/2026 (ensayo 16:18: ±6,8 mm en régimen,
-// recuperación de una perturbación de 5 cm en ~5 s).
+// recuperación de una perturbación de 5 cm en ~5 s). Kd bajado de 0,36 a 0,25 el 12/11/2026
+// (con la calibración nueva el duty salta menos y la pelota se mueve menos).
 static float    Kp = 0.300f;    // por mil de duty por mm de error
 static float    Ki = 0.030f;    // por mil por (mm · s)
-static float    Kd = 0.360f;    // por mil · s por mm
+static float    Kd = 0.250f;    // por mil · s por mm
 static float    Tf = 0.10f;     // filtro de la derivada [s]: con 0,10 el ruido del sensor mueve menos el duty
-static uint16_t u0 = 560;       // duty de equilibrio (por mil); se cambia con el comando U
-static uint16_t setpoint = 175; // altura deseada [mm desde la rejilla]
+static uint16_t u0 = 535;       // duty de equilibrio (por mil); se cambia con el comando U
+static uint16_t setpoint = 200; // altura deseada [mm desde la rejilla]
 static uint16_t rampa = 20;     // velocidad con que se mueve el setpoint [mm/s]; 0 = salto directo
-static float    spActual = 175; // setpoint que sigue el PID: avanza hacia "setpoint" a la velocidad "rampa"
+static volatile float spActual = 200; // setpoint que sigue el PID: avanza hacia "setpoint" a la velocidad "rampa"
 
-static uint8_t automatico = 0;  // 0 = manual (Dxxx), 1 = PID
+static volatile uint8_t automatico = 0;  // 0 = manual (Dxxx), 1 = PID
 static float   integral = 0;
 static float   derivada = 0;
 static float   yAnterior = 0;
+static uint8_t despegando = 0; // 1 mientras la pelota sigue apoyada en la rejilla después de arrancar
+
+// Última medición, la actualiza la interrupción del Timer1 y la lee el main para la telemetría
+static volatile uint16_t yActual   = 0;     // mm
+static volatile uint16_t adcActual = 0;     // cuentas del ADC (0-4095)
 
 static void mostrarAyuda(void) {
     comunicacion_enviarTexto("\r\nComandos:\r\n");
@@ -61,16 +70,20 @@ static void mostrarParametros(void) {
 }
 
 static void arrancarPID(void) {
+    automatico = 0;           // la interrupción no toca el PID mientras se reinicia
     uint16_t dutyActual = ventilador_getDuty();
     uint16_t yAhora     = sensor_leerMm();
 
     yAnterior   = yAhora;
+    despegando  = (yAhora < Y_DESPEGUE);   // la pelota está apoyada: hay que despegarla
     integral    = 0;          // u0 ya aporta el duty de equilibrio
     derivada    = 0;
 
-    // Con rampa, el setpoint arranca desde la altura actual y avanza de a poco hasta el pedido
+    // Con rampa, el setpoint arranca desde la altura real de la pelota (0 si está apoyada en la
+    // rejilla) y avanza de a poco hasta el pedido. Así el error empieza en cero, la integral no se
+    // carga mientras la pelota despega y no sube de golpe hasta el tope. El límite SP_MIN vale solo
+    // para el setpoint pedido (comando S), no para este punto de partida.
     spActual = (rampa > 0) ? yAnterior : setpoint;
-    if (spActual < SP_MIN) spActual = SP_MIN;
     if (spActual > SP_MAX) spActual = SP_MAX;
 
     if (dutyActual == 0) {             // empujón suave para que el motor arranque sin tirar la pelota arriba
@@ -112,7 +125,7 @@ static void pasoPID(float y) {
     float u = u0 + Kp * e + integral + derivada;
 
     // Perturbación externa generada con el DAC: se suma al duty para probar el rechazo del lazo
-    // u += perturbacion_getAmplitud() * perturbacion_valor();   // DAC desactivado temporalmente
+    u += perturbacion_getAmplitud() * perturbacion_valor();
 
     // Saturación
     float uSat = u;
@@ -124,7 +137,53 @@ static void pasoPID(float y) {
         integral += Ki * Ts * e;
     }
 
+    // Despegue: mientras la pelota está apoyada, la integral junta el esfuerzo extra que hace
+    // falta para levantarla de la rejilla. Una vez en el aire ese extra sobra y la tiraría hacia
+    // arriba, así que se descarta.
+    if (despegando && y > Y_DESPEGUE) {
+        despegando = 0;
+        integral   = 0;
+    }
+
     ventilador_setDuty((uint16_t)uSat);
+}
+
+// Timer1: interrupción por match cada TS_MS. El período del lazo no depende de lo que haga el main
+// (por ejemplo, de que esté esperando a que salga una línea por la UART).
+static void timerControl_init(void) {
+    TIM_TIMERCFG_T cfg = {
+        .prescaleOpt   = TIM_US,
+        .prescaleValue = 1                      // el contador suma 1 cada 1 µs
+    };
+    TIM_MATCHCFG_T match = {
+        .channel    = TIM_MATCH_0,
+        .intEn      = ENABLE,                   // interrumpe al llegar a MR0
+        .stopEn     = DISABLE,
+        .resetEn    = ENABLE,                   // y vuelve a 0: interrupción periódica
+        .extOpt     = TIM_NOTHING,
+        .matchValue = TS_MS * 1000 - 1          // de 0 a 39999: 40000 µs
+    };
+
+    TIM_InitTimer(LPC_TIM1, &cfg);
+    TIM_ConfigMatch(LPC_TIM1, &match);
+    NVIC_SetPriority(TIMER1_IRQn, 2);           // la UART (prioridad 0) puede interrumpir al PID
+    NVIC_EnableIRQ(TIMER1_IRQn);
+    TIM_Enable(LPC_TIM1);
+}
+
+// Lazo de control: lee el promedio que dejó el DMA, lo pasa a mm y, en modo automático,
+// calcula el PID y actualiza el PWM
+void TIMER1_IRQHandler(void) {
+    TIM_ClearIntPending(LPC_TIM1, TIM_MR0_INT);
+
+    uint16_t adc = sensor_leer();
+    uint16_t y   = sensor_aMm(adc);
+    adcActual = adc;
+    yActual   = y;
+
+    if (automatico) {
+        pasoPID(y);
+    }
 }
 
 static void atenderComando(void) {
@@ -194,14 +253,12 @@ static void atenderComando(void) {
 
 int main(void) {
     char texto[64];
-    uint32_t ultimoPaso = 0;
     uint32_t ultimaTelem = 0;
-    uint16_t y = 0;
 
     ventilador_init();
     comunicacion_init();
     sensor_init();
-    // perturbacion_init();   // DAC desactivado temporalmente (prueba: ver si interfiere con el ADC)
+    perturbacion_init();    // DAC + DMA (canal 1); arranca con amplitud 0, se activa con el comando W
     demora_init();
     ventilador_setDuty(0);
 
@@ -209,23 +266,17 @@ int main(void) {
     mostrarAyuda();
     mostrarParametros();
 
+    timerControl_init();    // desde acá el lazo de control corre solo, en la interrupción del Timer1
+
+    // El main solo atiende la telemetría y los comandos
     while (1) {
         uint32_t ahora = demora_millis();
 
-        // Lazo de control cada TS_MS
-        if (ahora - ultimoPaso >= TS_MS) {
-            ultimoPaso = ahora;
-            y = sensor_leerMm();
-            if (automatico) {
-                pasoPID(y);
-            }
-        }
-
-        // Telemetría: tiempo, setpoint, medición, duty
+        // Telemetría: tiempo, setpoint, medición, duty y ADC crudo
         if (ahora - ultimaTelem >= TELEM_MS) {
             ultimaTelem = ahora;
-            sprintf(texto, "t=%lu sp=%u y=%u u=%u\r\n",
-                    ahora, (uint16_t)(spActual + 0.5f), y, ventilador_getDuty());
+            sprintf(texto, "t=%lu sp=%u y=%u u=%u a=%u\r\n",
+                    ahora, (uint16_t)(spActual + 0.5f), yActual, ventilador_getDuty(), adcActual);
             comunicacion_enviarTexto(texto);
         }
 

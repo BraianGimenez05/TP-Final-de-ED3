@@ -29,7 +29,7 @@ except ImportError:
 BAUDIOS = 9600
 SIMULADOR = "SIMULADOR"
 VENTANA_S = 30      # segundos visibles en el gráfico
-RE_TELEM = re.compile(r"t=(\d+) sp=(\d+) y=(\d+) u=(\d+)")
+RE_TELEM = re.compile(r"t=(\d+) sp=(\d+) y=(\d+) u=(\d+)(?: a=(\d+))?")   # a: ADC crudo (opcional)
 PAUSA_ENTRE_CMD_MS = 150
 RE_PARAM = re.compile(r"SP=(\d+) u0=(\d+) Kp=(-?\d+) Ki=(-?\d+) Kd=(-?\d+).*?"
                       r"(?:W=(\d+) F=(\d+) )?(?:R=(\d+) )?modo=(\w+)")
@@ -132,7 +132,7 @@ class Dashboard(tk.Tk):
 
         self.ax_y.set_ylabel("Altura [mm]")
         # Escalas fijas: altura en todo el rango del sensor; duty en el rango que usa el PID
-        self.ax_y.set_ylim(0, 350)
+        self.ax_y.set_ylim(0, 400)
         self.ax_y.set_yticks(range(0, 351, 50))
         self.ax_u.set_ylim(0, 750)
         self.ax_u.set_yticks(range(0, 751, 150))
@@ -174,11 +174,11 @@ class Dashboard(tk.Tk):
         params = ttk.LabelFrame(padre, text="Parámetros del PID", padding=6)
         params.pack(fill=tk.X)
         self.entradas = {}
-        campos = [("S", "Setpoint [mm]", "175"),
+        campos = [("S", "Setpoint [mm]", "200"),
                   ("P", "Kp × 1000", "300"),
                   ("I", "Ki × 1000", "30"),
-                  ("K", "Kd × 1000", "360"),
-                  ("U", "u0 [‰]", "560"),
+                  ("K", "Kd × 1000", "250"),
+                  ("U", "u0 [‰]", "535"),
                   ("R", "Rampa [mm/s]", "20"),
                   ("W", "Perturbación [‰]", "0"),
                   ("F", "Frec. pert. [0,1 Hz]", "5")]
@@ -197,18 +197,21 @@ class Dashboard(tk.Tk):
         marco = ttk.LabelFrame(padre, text="Consola", padding=6)
         marco.pack(fill=tk.BOTH, expand=True, pady=(6, 0))
 
-        self.txt_consola = tk.Text(marco, width=42, height=10, font=("monospace", 9), state=tk.DISABLED)
-        self.txt_consola.pack(fill=tk.BOTH, expand=True)
-
-        self.var_ver_telem = tk.BooleanVar(value=False)
-        ttk.Checkbutton(marco, text="Mostrar telemetría", variable=self.var_ver_telem).pack(anchor=tk.W)
-
+        # La fila para escribir comandos se empaqueta primero, abajo: si la ventana queda baja,
+        # se achica el texto de la consola y no la entrada
         fila = ttk.Frame(marco)
-        fila.pack(fill=tk.X, pady=(6, 0))
+        fila.pack(side=tk.BOTTOM, fill=tk.X, pady=(6, 0))
         self.ent_cmd = ttk.Entry(fila)
         self.ent_cmd.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.ent_cmd.bind("<Return>", lambda _e: self._enviar_manual())   # Enter envía
         ttk.Button(fila, text="Enviar", command=self._enviar_manual).pack(side=tk.LEFT, padx=4)
+
+        self.var_ver_telem = tk.BooleanVar(value=False)
+        ttk.Checkbutton(marco, text="Mostrar telemetría", variable=self.var_ver_telem).pack(
+            side=tk.BOTTOM, anchor=tk.W)
+
+        self.txt_consola = tk.Text(marco, width=42, height=6, font=("monospace", 9), state=tk.DISABLED)
+        self.txt_consola.pack(fill=tk.BOTH, expand=True)
 
     # ---------------------------------------------------- conexión
     def _refrescar_puertos(self):
@@ -304,8 +307,9 @@ class Dashboard(tk.Tk):
             linea = self.cola_rx.get()
             m = RE_TELEM.fullmatch(linea)
             if m:                                           # es telemetría
-                t, sp, y, u = (int(x) for x in m.groups())
-                self._agregar_muestra(t, sp, y, u)
+                t, sp, y, u = (int(x) for x in m.groups()[:4])
+                adc = int(m.group(5)) if m.group(5) else None
+                self._agregar_muestra(t, sp, y, u, adc)
                 if self.var_ver_telem.get():
                     self._log(linea)
             else:                                           # es otra respuesta (OK, parámetros...)
@@ -324,11 +328,13 @@ class Dashboard(tk.Tk):
         for letra, valor in zip("SUPIKWFR", (sp, u0, kp, ki, kd, amp, frec, rampa)):
             if valor is None:                   # firmware viejo, sin rampa
                 continue
+            if self.focus_get() is self.entradas[letra]:
+                continue                        # no pisar el campo que se está editando
             self.entradas[letra].delete(0, tk.END)
             self.entradas[letra].insert(0, valor)
         self.lbl_modo.config(text=f"Modo: {modo}")
 
-    def _agregar_muestra(self, t, sp, y, u):
+    def _agregar_muestra(self, t, sp, y, u, adc=None):
         if self.t and t < self.t[-1]:       # el tiempo volvió atrás: la LPC se reinició
             for lista in (self.t, self.sp, self.y, self.u):
                 lista.clear()
@@ -337,9 +343,10 @@ class Dashboard(tk.Tk):
         while self.t[-1] - self.t[0] > VENTANA_S * 1000:
             for lista in (self.t, self.sp, self.y, self.u):
                 lista.popleft()
-        self.lbl_valores.config(text=f"y = {y:<5d} sp = {sp}\nerror = {sp - y:<5d} u = {u}")
+        texto_adc = f"\nADC = {adc}" if adc is not None else ""
+        self.lbl_valores.config(text=f"y = {y:<5d} sp = {sp}\nerror = {sp - y:<5d} u = {u}{texto_adc}")
         if self.escritor_csv:
-            self.escritor_csv.writerow([t, sp, y, u])
+            self.escritor_csv.writerow([t, sp, y, u, "" if adc is None else adc])
 
     def _actualizar_grafico(self):
         if self.t:
@@ -374,7 +381,7 @@ class Dashboard(tk.Tk):
         ruta = CARPETA_ENSAYOS / datetime.now().strftime("ensayo_%Y-%m-%d_%H-%M-%S.csv")
         self.archivo_csv = open(ruta, "w", newline="")
         self.escritor_csv = csv.writer(self.archivo_csv)
-        self.escritor_csv.writerow(["t_ms", "setpoint", "y", "u"])   # encabezado
+        self.escritor_csv.writerow(["t_ms", "setpoint", "y", "u", "adc"])   # encabezado
         self.boton_csv.config(text="Detener grabación")
         self.lbl_csv.config(text=f"Grabando {ruta.name}")
         self._log(f"-- Grabando en {ruta}")
