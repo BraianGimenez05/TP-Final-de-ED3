@@ -37,7 +37,7 @@ Desde un dashboard en Python en la PC, comunicado por UART, el usuario fija el s
   * Recibir por UART el setpoint, las constantes Kp, Ki, Kd, el duty de equilibrio, la velocidad de rampa y los parámetros de la perturbación, y enviar telemetría (tiempo, setpoint, altura, duty y lectura del ADC).
   * Compensar perturbaciones externas: desplazamientos de la esfera, corrientes de aire y variaciones del punto de equilibrio del ventilador.
   * Generar con el DAC una perturbación que se suma al duty del ventilador para estudiar el rechazo de perturbaciones: senoidal (DAC + DMA, 0,4 a 5 Hz) o cuadrada (saltos de golpe, período de 0,2 a 60 s), con amplitud configurable. La salida AOUT maneja un buzzer que suena al ritmo de la perturbación.
-  * Avisar con el buzzer cuando la esfera se aleja del setpoint más de una banda configurable (100 mm por defecto), si la perturbación está apagada.
+  * Avisar con un pitido intermitente del buzzer cuando la esfera se aleja del setpoint más de una banda configurable (±10 cm por defecto), si la perturbación está apagada. El pitido lo genera el DMA copiando una onda cuadrada al DAC, sin intervención de la CPU.
 * Fuera de alcance:
   * Conectividad inalámbrica (Wi-Fi / Bluetooth).
   * Almacenamiento de datos en el propio equipo (tarjeta SD o memoria flash). Los ensayos se registran en la PC a través de la UART.
@@ -54,7 +54,7 @@ Desde un dashboard en Python en la PC, comunicado por UART, el usuario fija el s
 | 6 | La comunicación es bidireccional: la PC envía comandos y la LPC responde y envía telemetría | Dashboard / terminal serie |
 
 ### Posibles Etapas Siguientes
-* Revisar el acondicionamiento de la señal del sensor (en particular el zener de protección) para recuperar la sensibilidad y el nivel de ruido medidos en la primera calibración.
+* Revisar el acondicionamiento de la señal del sensor para recuperar la sensibilidad y el nivel de ruido medidos en la primera calibración.
 * Mejorar la respuesta ante escalones de setpoint: probar Ki = 0,020 con una rampa de 10 mm/s, o agregar peso de referencia en el término proporcional.
 * Medir la respuesta en frecuencia completa con la perturbación del DAC, con más frecuencias y la telemetría a mayor velocidad.
 * Agregar un tope mecánico dentro del tubo para que la esfera no ingrese en la zona ciega del sensor.
@@ -85,7 +85,7 @@ Desde un dashboard en Python en la PC, comunicado por UART, el usuario fija el s
 | `Wxx` | Amplitud de la perturbación senoidal del DAC, en ‰ de duty (0 = apagada). Máximo 200. Se suma al duty solo en modo automático | `W50` | línea de parámetros |
 | `Fxx` | Frecuencia de la perturbación senoidal, en décimas de Hz (4–50, es decir 0,4 a 5 Hz) | `F10` | línea de parámetros |
 | `Cxxx` | Perturbación cuadrada: período en décimas de segundo (2–600, es decir 0,2 a 60 s). `C0` vuelve a la senoidal | `C200` | línea de parámetros |
-| `Bxxx` | Alarma: el buzzer suena si la esfera se aleja del setpoint más de `xxx` mm (0 = alarma apagada, máximo 300). Solo con la perturbación apagada | `B100` | línea de parámetros |
+| `Bxxx` | Alarma: el buzzer pita de forma intermitente (2 Hz) si la esfera se aleja del setpoint más de `xxx` mm (0 = alarma apagada, máximo 300). Solo con la perturbación apagada | `B100` | línea de parámetros |
 | `?` | Consulta los parámetros actuales | `?` | `SP=200 u0=535 Kp=300 Ki=30 Kd=250 (x1000) W=0 F=5 R=20 C=0 B=100 modo=AUTO` |
 | (otro) | Comando no reconocido | `X` | lista de comandos |
 
@@ -128,18 +128,18 @@ flowchart LR
         T1["Timer1<br/>interrupción cada 40 ms"]
         PID["PID<br/>rampa, anti-windup,<br/>derivada filtrada"]
         PWM["PWM1.1<br/>500 Hz"]
-        DMA1["GPDMA canal 1<br/>tabla senoidal"]
+        DMA1["GPDMA canal 1<br/>tabla senoidal o<br/>cuadrada de la alarma"]
         DAC["DAC<br/>AOUT"]
     end
 
     subgraph SENSOR["Medición"]
         SHARP["Sensor IR<br/>Sharp GP2Y0A21"]
-        FILT["Filtro Sallen-Key<br/>LM358 + zener"]
+        FILT["Filtro Sallen-Key<br/>LM358"]
     end
 
     subgraph POT["Potencia (12 V aislado)"]
         OPTO["Optoacoplador<br/>PC817"]
-        MOS["MOSFET<br/>IRLZ44N"]
+        MOS["MOSFET<br/>2SK3569"]
         FAN["Ventilador 12 V"]
     end
 
@@ -170,8 +170,8 @@ flowchart LR
                  ┌──────────────────────────┐   UART   ┌──────────────────┐
                  │         LPC1769          │◄────────►│ Dashboard Python │
  Sharp IR ──► Filtro ──► ADC ──DMA──► PID   │  CP2102  │  (gráfico, CSV)  │
- (5 V)     (LM358 + zener)      Timer1      │          └──────────────────┘
-                 │                PWM ──────┼──► Optoacoplador ──► MOSFET IRLZ44N ──► Ventilador 12 V
+ (5 V)        (LM358)          Timer1      │          └──────────────────┘
+                 │                PWM ──────┼──► Optoacoplador ──► MOSFET 2SK3569 ──► Ventilador 12 V
                  │                          │     (aislación)         (diodo de protección)
                  │   tabla ──DMA──► DAC ────┼──► Seguidor (LM358) ──► Transistor ──► Buzzer
                  └──────────────────────────┘
@@ -181,7 +181,7 @@ flowchart LR
 
 ![Esquemático del circuito](docs/img/esquematico.png)
 
-El circuito se divide en cuatro bloques: la etapa de potencia aislada con el optoacoplador (1), el sensor con el filtro Sallen-Key y la protección de la entrada del ADC (2), la salida del DAC con el seguidor, el transistor y el buzzer (3), y la comunicación con la PC junto con la alimentación de 5 V (4). La masa del lado de 12 V está separada de la masa de la LPC.
+El circuito se divide en cuatro bloques: la etapa de potencia aislada con el optoacoplador (1), el sensor con el filtro Sallen-Key y la resistencia hacia la entrada del ADC (2), la salida del DAC con el seguidor, el transistor y el buzzer (3), y la comunicación con la PC junto con la alimentación de 5 V (4). La masa del lado de 12 V está separada de la masa de la LPC.
 
 | Señal | Pin LPC1769 | Conector LPCXpresso |
 |---|---|---|
@@ -194,8 +194,8 @@ El circuito se divide en cuatro bloques: la etapa de potencia aislada con el opt
 
 * Descripción del circuito y consideraciones de diseño:
   * Sensor: Sharp GP2Y0A21YK0F alimentado a 5 V, con capacitores de 10 µF y 100 nF junto al sensor (consume picos de corriente cada vez que pulsa su LED).
-  * Acondicionamiento: filtro pasa-bajos activo Sallen-Key de ~16 Hz (R = 10 kΩ, C = 1 µF) con un LM358 como seguidor. Como el LM358 se alimenta a 5 V, la salida pasa por una resistencia de 1 kΩ y un zener de 3,3 V que limitan la tensión en la entrada del ADC.
-  * Actuador: ventilador de 12 V / 0,26 A conmutado por un MOSFET de nivel lógico (IRLZ44N), con pull-down de 10 kΩ en el gate y diodo 1N4007 en antiparalelo con la carga.
+  * Acondicionamiento: filtro pasa-bajos activo Sallen-Key de ~16 Hz (R = 10 kΩ, C = 1 µF) con un LM358 como seguidor. La salida pasa por una resistencia de 1 kΩ hacia la entrada del ADC. Como el seguidor copia la tensión del sensor, que no supera ~3,1 V, la entrada queda dentro del rango de 3,3 V; la resistencia limita la corriente si la tensión llegara a superarlo. En una versión anterior había además un zener de 3,3 V, que se retiró.
+  * Actuador: ventilador de 12 V / 0,26 A conmutado por un MOSFET 2SK3569 (K3569), con pull-down de 10 kΩ en el gate y diodo 1N4007 en antiparalelo con la carga.
   * Aislación: un optoacoplador PC817 separa la LPC (3,3 V) del circuito de 12 V. Las masas de ambos lados no están unidas. La velocidad del optoacoplador limita el PWM a 500 Hz.
   * Indicador (perturbación y alarma): la salida del DAC pasa por la otra mitad del LM358, conectada como seguidor para no cargar el pin AOUT, y a través de una resistencia de 1 kΩ maneja la base de un transistor NPN que enciende un buzzer alimentado a 5 V. P0.26 arranca con el pull-up interno activado, por lo que el buzzer suena hasta que el firmware inicializa el DAC y deja la salida en 0 V.
   * Alimentación: fuente de 12 V / 2 A para el ventilador; la LPC1769 por USB; el sensor, el operacional y el buzzer con los 5 V del adaptador USB-UART.
@@ -210,7 +210,7 @@ El circuito se divide en cuatro bloques: la etapa de potencia aislada con el opt
   * `perturbacion` — salida del DAC, con tres modos:
     * Senoidal: GPDMA canal 1 (memoria → DAC). Una tabla de 1024 muestras con un período de senoidal se repite sin intervención de la CPU, y el contador del DAC fija la frecuencia. Como el contador es de 16 bits, la frecuencia mínima es 0,4 Hz.
     * Cuadrada: el DMA se detiene y la interrupción del Timer1 escribe el DAC directamente, alternando entre el máximo y el mínimo cada medio período. Así se logran períodos de hasta 60 s, necesarios para ver cómo el PID corrige cada salto.
-    * Alarma: con la perturbación apagada, la salida queda en alto (buzzer sonando) mientras la esfera está fuera de la banda, y en 0 V el resto del tiempo.
+    * Alarma: con la perturbación apagada, cuando la esfera sale de la banda el canal 1 del DMA pasa a copiar al DAC otra tabla, una onda cuadrada de 2 Hz (256 muestras), y el buzzer pita de forma intermitente sin intervención de la CPU. Cuando la esfera vuelve, el DMA se detiene y la salida queda en 0 V.
 
     En los dos modos de perturbación, el PID lee el valor actual del DAC, lo lleva al rango −1..1 y lo suma al duty multiplicado por la amplitud. Con la perturbación apagada ese término es 0, por lo que la alarma no modifica el duty.
   * Timer1 — interrupción por match cada 40 ms. En cada una: avanza la perturbación cuadrada, lee la altura, ejecuta el PID y revisa la alarma.
@@ -225,7 +225,7 @@ leer altura (mm) ──► rampa del setpoint ──► e = setpoint − altura
         │   W·p: perturbación del DAC, p entre −1 y 1 (senoidal o cuadrada; 0 si está apagada)
         └──► limitar a 150–650 ‰ ──► PWM del ventilador
                     │
-                    └──► alarma: |e| > banda ──► buzzer (con histéresis de 20 mm)
+                    └──► alarma: |e| > banda ──► DMA + DAC: pitido de 2 Hz (histéresis de 20 mm)
 ```
 
 * Lazo de control: la interrupción del Timer1 (match 0, cada 40 ms) lee el promedio del ADC que dejó el DMA, lo convierte a mm y, en modo automático, calcula el PID y actualiza el PWM. Como el período lo marca el hardware, no se ve afectado por lo que haga el programa principal (por ejemplo, la espera mientras sale una línea por la UART).
@@ -282,7 +282,7 @@ Recomendaciones para los ensayos: realizarlos con puertas y ventanas cerradas y 
 | 3 | Implementación y ajuste del PID. |
 | 4 | Integración, ensayos (respuesta a escalón, perturbaciones) y documentación. |
 
-* Etapa 1 (validación inicial): estructura de madera con tubo de 55 cm y etapa de potencia con MOSFET IRLZ44N. El primer ventilador (0,11 A) no levantaba la esfera y se reemplazó por uno de 0,26 A. Un transistor bipolar TIP31C no llegaba a saturar con la corriente de un pin de la LPC y se reemplazó por el MOSFET de nivel lógico.
+* Etapa 1 (validación inicial): estructura de madera con tubo de 55 cm y etapa de potencia con MOSFET IRLZ44N (en el montaje final, 2SK3569). El primer ventilador (0,11 A) no levantaba la esfera y se reemplazó por uno de 0,26 A. Un transistor bipolar TIP31C no llegaba a saturar con la corriente de un pin de la LPC y se reemplazó por el MOSFET de nivel lógico.
 * Etapa 2 (adquisición y comunicación): UART bidireccional con recepción por interrupción y protocolo de comandos. Se agregó un optoacoplador para aislar la LPC del circuito de 12 V, lo que obligó a bajar el PWM de 20 kHz a 500 Hz. Lectura del sensor con ADC + DMA en buffer circular, calibración a mm y dashboard en Python con registro de ensayos en CSV.
 * Etapa 3 (integración lógica): PID en mm funcionando en el equipo, con derivada sobre la medición y filtrada, anti-windup, rampa de setpoint y empujón de arranque. Las ganancias se ajustaron experimentalmente a partir del modelo de la planta.
 * Etapa 4 (sistema completo): sistema integrado y probado sobre el equipo, con más de 30 ensayos registrados (calibración, regulación, arranque, escalones de setpoint y perturbaciones, incluida la del DAC). En esta etapa el lazo de control pasó a la interrupción del Timer1, se repitió la calibración del sensor y se activó la perturbación con el DAC. Durante la integración se resolvieron, entre otros, los siguientes problemas:

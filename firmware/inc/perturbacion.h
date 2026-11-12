@@ -16,8 +16,8 @@ void     perturbacion_setCuadrada(uint16_t dS);
 uint16_t perturbacion_getCuadrada(void);           // período actual en décimas de s (0 = senoidal)
 void     perturbacion_tick(uint16_t ms);           // se llama desde el Timer1 cada "ms" milisegundos
 
-// Alarma con el buzzer: con la perturbación apagada (W0), pone la salida del DAC en alto (buzzer
-// sonando) o en 0 V. Con la perturbación prendida no hace nada: el DAC lo usa la perturbación.
+// Alarma con el buzzer: con la perturbación apagada (W0), el DMA copia al DAC una cuadrada de 2 Hz
+// (pitido intermitente). Con la perturbación prendida no hace nada: el DAC lo usa la perturbación.
 void     perturbacion_alarma(uint8_t encendida);
 
 #endif
