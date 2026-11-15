@@ -8,8 +8,9 @@
 #include "comunicacionUart.h"
 #include "sensor.h"
 #include "demora.h"
-#include "perturbacion.h"
+#include "salidaAltura.h"
 #include "lpc17xx_timer.h"
+#include "lpc17xx_gpio.h"
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -24,6 +25,8 @@
 
 #define Y_DESPEGUE   50      // [mm] por encima de esta altura se considera que la pelota despegó
 #define HISTERESIS   20      // [mm] la alarma se apaga recién cuando el error baja 20 mm de la banda
+#define LED_ALARMA   (1UL << 22)   // LED rojo de la LPCXpresso (P0.22): parpadea con la alarma
+#define TICKS_LED    6       // pasos de 40 ms entre cambios del LED: ~2 parpadeos por segundo
 
 // Parámetros del controlador (se pueden cambiar por UART).
 // Valores ajustados en el equipo el 11/11/2026 (ensayo 16:18: ±6,8 mm en régimen,
@@ -35,7 +38,7 @@ static float    Kd = 0.250f;    // por mil · s por mm
 static float    Tf = 0.10f;     // filtro de la derivada [s]: con 0,10 el ruido del sensor mueve menos el duty
 static uint16_t u0 = 535;       // duty de equilibrio (por mil); se cambia con el comando U
 static uint16_t setpoint = 200; // altura deseada [mm desde la rejilla]
-static uint16_t bandaAlarma = 100; // [mm] el buzzer suena si la pelota se aleja más que esto del setpoint; 0 = alarma apagada
+static uint16_t bandaAlarma = 100; // [mm] el LED parpadea si la pelota se aleja más que esto del setpoint; 0 = alarma apagada
 static uint16_t rampa = 20;     // velocidad con que se mueve el setpoint [mm/s]; 0 = salto directo
 static volatile float spActual = 200; // setpoint que sigue el PID: avanza hacia "setpoint" a la velocidad "rampa"
 
@@ -57,19 +60,15 @@ static void mostrarAyuda(void) {
     comunicacion_enviarTexto("  Pxxx   Kp x1000   Ixxx  Ki x1000   Kxxx  Kd x1000\r\n");
     comunicacion_enviarTexto("  Uxxx   duty de equilibrio u0\r\n");
     comunicacion_enviarTexto("  Rxx    rampa del setpoint en mm/s (0 = salto)\r\n");
-    comunicacion_enviarTexto("  Wxx    perturbacion senoidal (DAC), amplitud en por mil (0 = apagada)\r\n");
-    comunicacion_enviarTexto("  Fxx    frecuencia de la perturbacion en decimas de Hz (4-50)\r\n");
-    comunicacion_enviarTexto("  Cxxx   perturbacion cuadrada, periodo en decimas de s (2-600, 0 = senoidal)\r\n");
-    comunicacion_enviarTexto("  Bxxx   alarma: buzzer si el error supera xxx mm (0 = apagada)\r\n");
+    comunicacion_enviarTexto("  Bxxx   alarma: el LED parpadea si el error supera xxx mm (0 = apagada)\r\n");
     comunicacion_enviarTexto("  ?      parametros actuales\r\n");
 }
 
 static void mostrarParametros(void) {
     char texto[128];
-    sprintf(texto, "SP=%u u0=%u Kp=%d Ki=%d Kd=%d (x1000) W=%u F=%u R=%u C=%u B=%u modo=%s\r\n",
+    sprintf(texto, "SP=%u u0=%u Kp=%d Ki=%d Kd=%d (x1000) R=%u B=%u modo=%s\r\n",
             setpoint, u0, (int)(Kp * 1000), (int)(Ki * 1000), (int)(Kd * 1000),
-            perturbacion_getAmplitud(), perturbacion_getFrecuencia(),
-            rampa, perturbacion_getCuadrada(), bandaAlarma, automatico ? "AUTO" : "MANUAL");
+            rampa, bandaAlarma, automatico ? "AUTO" : "MANUAL");
     comunicacion_enviarTexto(texto);
 }
 
@@ -128,9 +127,6 @@ static void pasoPID(float y) {
 
     float u = u0 + Kp * e + integral + derivada;
 
-    // Perturbación externa generada con el DAC: se suma al duty para probar el rechazo del lazo
-    u += perturbacion_getAmplitud() * perturbacion_valor();
-
     // Saturación
     float uSat = u;
     if (uSat < U_MIN) uSat = U_MIN;
@@ -175,7 +171,7 @@ static void timerControl_init(void) {
     TIM_Enable(LPC_TIM1);
 }
 
-// Alarma: el buzzer suena mientras la pelota está a más de bandaAlarma mm del setpoint.
+// Alarma: el LED rojo de la placa parpadea mientras la pelota está a más de bandaAlarma mm del setpoint.
 // Solo en automático y una vez que la pelota despegó (mientras sube desde la rejilla el error es
 // grande a propósito). Con histéresis, para que no titile cuando el error está justo en el borde.
 static void revisarAlarma(uint16_t y) {
@@ -191,7 +187,15 @@ static void revisarAlarma(uint16_t y) {
                                                                         : bandaAlarma / 2)) {
         sonando = 0;
     }
-    perturbacion_alarma(sonando);
+
+    static uint8_t ticks = 0;
+    if (!sonando) {
+        ticks = 0;
+        GPIO_ClearPins(PORT_0, LED_ALARMA);
+    } else if (++ticks >= TICKS_LED) {
+        ticks = 0;
+        GPIO_TogglePins(PORT_0, LED_ALARMA);
+    }
 }
 
 // Lazo de control: lee el promedio que dejó el DMA, lo pasa a mm y, en modo automático,
@@ -199,12 +203,11 @@ static void revisarAlarma(uint16_t y) {
 void TIMER1_IRQHandler(void) {
     TIM_ClearIntPending(LPC_TIM1, TIM_MR0_INT);
 
-    perturbacion_tick(TS_MS);       // en modo cuadrada, cambia el nivel del DAC cada medio período
-
     uint16_t adc = sensor_leer();
     uint16_t y   = sensor_aMm(adc);
     adcActual = adc;
     yActual   = y;
+    salidaAltura_escribir(y);       // el DAC saca la altura en tensión (0-350 mm -> 0-3,3 V)
 
     if (automatico) {
         pasoPID(y);
@@ -261,18 +264,6 @@ static void atenderComando(void) {
             rampa = valor;
             mostrarParametros();
             break;
-        case 'W': case 'w':
-            perturbacion_setAmplitud(valor);
-            mostrarParametros();
-            break;
-        case 'F': case 'f':
-            perturbacion_setFrecuencia(valor);
-            mostrarParametros();
-            break;
-        case 'C': case 'c':
-            perturbacion_setCuadrada(valor);
-            mostrarParametros();
-            break;
         case 'B': case 'b':
             if (valor > 300) valor = 300;
             bandaAlarma = valor;
@@ -294,7 +285,9 @@ int main(void) {
     ventilador_init();
     comunicacion_init();
     sensor_init();
-    perturbacion_init();    // DAC + DMA (canal 1); arranca con amplitud 0, se activa con el comando W
+    salidaAltura_init();    // DAC: saca la altura medida en tensión
+    GPIO_SetDir(PORT_0, LED_ALARMA, GPIO_OUTPUT);   // LED de la alarma, arranca apagado
+    GPIO_ClearPins(PORT_0, LED_ALARMA);
     demora_init();
     ventilador_setDuty(0);
 

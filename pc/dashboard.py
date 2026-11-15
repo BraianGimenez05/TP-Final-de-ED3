@@ -180,9 +180,6 @@ class Dashboard(tk.Tk):
                   ("K", "Kd × 1000", "250"),
                   ("U", "u0 [‰]", "535"),
                   ("R", "Rampa [mm/s]", "20"),
-                  ("W", "Perturbación [‰]", "0"),
-                  ("F", "Frec. pert. [0,1 Hz]", "5"),
-                  ("C", "Cuadrada [0,1 s]", "0"),
                   ("B", "Alarma [mm]", "100")]
         for fila_n, (letra, texto, defecto) in enumerate(campos):
             ttk.Label(params, text=texto).grid(row=fila_n, column=0, sticky=tk.W, pady=1)
@@ -328,7 +325,7 @@ class Dashboard(tk.Tk):
     def _cargar_parametros(self, grupos):
         sp, u0, kp, ki, kd, amp, frec, rampa, cuad, banda, modo = grupos
         for letra, valor in zip("SUPIKWFRCB", (sp, u0, kp, ki, kd, amp, frec, rampa, cuad, banda)):
-            if valor is None:                   # firmware viejo, sin rampa
+            if valor is None or letra not in self.entradas:   # campo que este firmware no informa
                 continue
             if self.focus_get() is self.entradas[letra]:
                 continue                        # no pisar el campo que se está editando
