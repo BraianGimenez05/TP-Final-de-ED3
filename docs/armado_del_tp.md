@@ -29,7 +29,7 @@ flowchart TD
 
 Cada etapa del circuito se probó por separado antes de conectarla a la LPC1769, para no exponer la placa a un error de cableado.
 
-Estado actual: etapa de potencia, PWM, medición de u0 y comunicación UART terminados. La lectura del sensor por ADC está en prueba.
+Estado: todas las etapas están armadas y el sistema funciona en lazo cerrado. Los resultados de los ensayos están en el [README](../README.md#6-ensayos-pruebas-y-resultados).
 
 ## Diagrama de bloques
 
@@ -51,18 +51,20 @@ flowchart LR
     end
     subgraph POT[Potencia]
         OPT[Optoacoplador]
-        MOS[IRLZ44N]
+        MOS[MOSFET 2SK3569]
         VEN[Ventilador 12 V]
     end
-    BUF[Seguidor]
-    BUZ[Buzzer / LED]
+    BUF[Seguidor LM358]
+    VOUT[Altura en tensión<br/>0–3,3 V]
+    LED[LED de alarma<br/>P0.22]
     CP[USB-UART<br/>CP2102]
     PC[PC<br/>dashboard Python]
 
     SH --> FIL --> ADC
     PWM --> OPT --> MOS --> VEN
     F12 --> VEN
-    DAC --> BUF --> BUZ
+    DAC --> BUF --> VOUT
+    LPC --> LED
     UART <--> CP <--> PC
     USB --> LPC
     CP -- 5 V --> SH
@@ -74,10 +76,11 @@ flowchart LR
 |---|---|---|---|
 | Entrada del ADC (altura) | P0.23 (AD0.0) | J6-15 | salida del filtro, a través de 1 kΩ |
 | PWM del ventilador | P2.0 (PWM1.1) | J6-42 | entrada del optoacoplador, a través de 470 Ω |
-| Salida del DAC | P0.26 (AOUT) | J6-18 | entrada del seguidor |
+| Salida del DAC (altura en tensión) | P0.26 (AOUT) | J6-18 | entrada del seguidor (LM358, mitad B) |
+| LED de alarma | P0.22 | — | LED rojo de la propia placa |
 | UART TX | P0.2 (TXD0) | J6-21 | RX del CP2102 |
 | UART RX | P0.3 (RXD0) | J6-22 | TX del CP2102 |
-| 3,3 V | VIO 3V3 | J6-28 | alimentación del operacional (si es rail-to-rail) |
+| 3,3 V | VIO 3V3 | J6-28 | sin uso en el montaje final (el LM358 se alimenta a 5 V) |
 | GND | GND | J6-1 | masa común |
 
 La numeración del conector J6 corresponde a la LPCXpresso LPC1769; conviene verificarla con el diagrama de la placa antes de cablear.
@@ -87,10 +90,10 @@ La numeración del conector J6 corresponde a la LPCXpresso LPC1769; conviene ver
 | Tensión | Origen | Carga |
 |---|---|---|
 | 12 V | fuente externa de 12 V / 2 A | ventilador |
-| 5 V | pin 5V del CP2102 (USB) | sensor Sharp (~30 mA) y operacional si es LM358 |
-| 3,3 V | salida de 3,3 V de la LPC1769 | operacional si es rail-to-rail (MCP6002 / LMV358) |
+| 5 V | pin 5V del CP2102 (USB) | sensor Sharp (~30 mA) y operacional LM358 |
+| 3,3 V | salida de 3,3 V de la LPC1769 | sin uso en el montaje final |
 
-Todas las masas están unidas. Antes de conectar la LPC se verificó con el tester que no hubiera 12 V en ningún cable que llegue a la placa.
+Las masas de la LPC, el sensor, el operacional y el CP2102 están unidas. La masa de la fuente de 12 V queda separada: la única conexión entre los dos lados es la luz dentro del optoacoplador. Antes de conectar la LPC se verificó con el tester que no hubiera 12 V en ningún cable que llegue a la placa.
 
 ## Etapa 1: potencia
 
@@ -175,6 +178,10 @@ En la misma captura, durante el tiempo de conducción, la tensión de drain sube
 
 No debe colocarse un capacitor entre drain y GND ni en paralelo con el ventilador: en el primer caso se descarga en cortocircuito a través del MOSFET en cada encendido; en el segundo, se carga en cada pulso y el ventilador funciona casi a pleno con cualquier duty.
 
+### MOSFET del montaje final
+
+En el montaje final el IRLZ44N se reemplazó por un MOSFET canal N 2SK3569 (K3569), con el mismo circuito: 100 Ω entre el emisor del optoacoplador y el gate, 10 kΩ entre gate y source, y el diodo 1N4007 en antiparalelo con el ventilador. Como el optoacoplador lleva el gate a ~11 V desde la fuente de 12 V, ya no hace falta un MOSFET de nivel lógico: el requisito de conducir con 3,3 V solo existía cuando el gate se excitaba directamente desde la LPC.
+
 ### Tensión sobre el ventilador en función del duty
 
 Mediciones con el tester, con PWM a 20 kHz y excitación directa del gate:
@@ -246,25 +253,28 @@ El filtro deja pasar el movimiento de la pelota (pocos Hz) y atenúa los picos d
 | Operacional | Alimentación | Observaciones |
 |---|---|---|
 | MCP6002 o LMV358 (rail-to-rail) | 3,3 V | La salida nunca supera 3,3 V; el ADC queda protegido sin componentes extra |
-| LM358 | 5 V | A 3,3 V su salida no pasa de ~1,8 V y recortaría la señal del sensor a menos de ~15 cm. A 5 V cubre todo el rango, pero se agrega un zener 1N4728A (3,3 V) entre P0.23 y GND, después de la 1 kΩ, como protección |
+| LM358 (usado) | 5 V | A 3,3 V su salida no pasa de ~1,8 V y recortaría la señal del sensor a menos de ~15 cm. A 5 V cubre todo el rango. Como seguidor, su salida copia la tensión del sensor, que no supera ~3,1 V, y la resistencia de 1 kΩ limita la corriente hacia P0.23 si llegara a superar 3,3 V |
+
+En una primera versión se agregó además un zener 1N4728A (3,3 V) entre P0.23 y GND, después de la 1 kΩ. Se retiró en el montaje final: el seguidor no supera la tensión máxima del sensor (~3,1 V), por lo que la entrada del ADC queda dentro de su rango sin el zener.
 
 Patas del LM358 / MCP6002 (DIP-8): 1 salida A, 2 entrada − A, 3 entrada + A, 4 GND, 5 entrada + B, 6 entrada − B, 7 salida B, 8 Vcc. Si la mitad B no se usa, se une la pata 6 con la 7 y la 5 a GND.
 
-## Etapa 3: salida del DAC
+## Etapa 3: salida del DAC (altura en tensión)
 
-Seguidor de tensión con la mitad B del operacional:
+El DAC entrega la altura medida como una tensión: en cada paso del lazo de control (cada 40 ms), el firmware escribe en el DAC la altura ya convertida a mm, con la escala 0 mm → 0 V y 350 mm → 3,3 V (~9,4 mV/mm). La salida pasa por un seguidor de tensión con la mitad B del operacional:
 
 ```text
                     ┌───────┐
   P0.26 (AOUT) ─────┤+      │
-                    │   B   ├──┬────── Buzzer pasivo (piezo) ──── GND
+                    │   B   ├──┬────── salida de altura (0–3,3 V) ──► tester / osciloscopio
                  ┌──┤−      │  │
-                 │  └───────┘  │       o
+                 │  └───────┘  │
                  └─────────────┘
-                                 └──[ 330 Ω ]──▶|── GND   (LED)
 ```
 
-El seguidor evita cargar el pin AOUT. Se usa un buzzer piezoeléctrico, de alta impedancia; uno magnético (16–40 Ω) requiere más corriente de la que entrega el operacional y necesitaría un transistor.
+El seguidor evita cargar el pin AOUT, que entrega muy poca corriente. Para verificarla, con la pelota quieta a 20 cm la salida (pata 7) debe medir ~1,89 V contra GND.
+
+En versiones anteriores, esta salida manejaba un buzzer a través de un transistor NPN, primero para una perturbación senoidal o cuadrada que se sumaba al duty y después como alarma. Se retiró cuando el DAC pasó a sacar la altura: con la salida en tensión, el transistor conduciría con cualquier altura mayor a ~7 cm y el buzzer sonaría de forma permanente. La alarma se pasó al LED rojo de la placa (P0.22), que parpadea cuando la pelota se aleja del setpoint más de la banda configurada con el comando `B`.
 
 ## Etapa 4: comunicación UART
 
@@ -381,7 +391,7 @@ Se aplicó primero un 100 % durante unos instantes para asegurar el arranque del
 
 **u0 = 68,5 %.** La banda entre caer y subir hasta el extremo es de apenas 2 %. Es el comportamiento esperado de la planta: el término integrador hace que a lazo abierto no exista una altura de equilibrio estable, y cualquier exceso o falta de empuje mueve la pelota hasta un extremo. Cerca del extremo superior la pelota parece quedarse quieta porque el aire escapa por la salida del tubo, pero esa zona no es representativa del punto de trabajo.
 
-Esta medición se hizo con el PWM a 20 kHz y el gate excitado directamente desde la LPC. Después de agregar el optoacoplador (PWM a 500 Hz) y cambiar a la pelota de telgopor, la pelota flota con un duty de aproximadamente 34,5 %. Este es el valor que usa actualmente el firmware como u0.
+Esta medición se hizo con el PWM a 20 kHz y el gate excitado directamente desde la LPC. Después de agregar el optoacoplador (PWM a 500 Hz) y cambiar a la pelota de telgopor, la pelota flotó primero con un duty de ~34,5 %. Con el montaje final el equilibrio quedó entre 46,5 % y 56 % según la temperatura del ventilador y el ambiente; el firmware usa **u0 = 53,5 %** (duty promedio medido en régimen el 12/11), y el término integral compensa la diferencia que quede.
 
 Se evaluaron dos modificaciones mecánicas para ensanchar la banda: perforar el tubo a lo largo de su altura (el empuje pasaría a depender de la altura) y una fuga regulable en la base (reduce la ganancia por cada % de duty). Se decidió no aplicarlas y resolver la sensibilidad con el lazo cerrado.
 

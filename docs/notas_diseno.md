@@ -10,10 +10,11 @@ Con un ventilador de dos cables, el PWM se aplica a la alimentación a través d
 
 ## Etapa de potencia
 
-- MOSFET de nivel lógico IRLZ44N: conduce completamente con 3,3 V en el gate. Un IRF540N o IRFZ44N necesita 10 V y con la LPC conduciría parcialmente.
+- MOSFET de nivel lógico IRLZ44N: conduce completamente con 3,3 V en el gate. Un IRF540N o IRFZ44N necesita 10 V y con la LPC conduciría parcialmente. Ese requisito vale cuando el gate se excita directo desde la LPC.
+- Montaje final: MOSFET 2SK3569 (K3569). Con el optoacoplador, el gate recibe ~11 V desde la fuente de 12 V, así que no hace falta que sea de nivel lógico.
 - Se probó primero un TIP31C, que no satura con la corriente que entrega un pin de la LPC (~5 mA, harían falta ~26 mA de base para 0,26 A). El transistor quedó en corto y se descartó.
 - Diodo en antiparalelo con el ventilador (1N4007; un 1N5819 es mejor a frecuencias altas). Un zener no sirve como diodo de protección del motor.
-- Masa común entre la fuente de 12 V y la LPC1769, salvo que se use el optoacoplador con masas separadas.
+- Montaje final: con el optoacoplador, la masa de la fuente de 12 V queda separada de la masa de la LPC1769. Sin optoacoplador (primeras pruebas), las masas tienen que estar unidas.
 
 ## Optoacoplador y frecuencia del PWM
 
@@ -25,7 +26,7 @@ En la medición a 500 Hz, la tensión de drain durante la conducción sube hasta
 
 ## Sensibilidad de la planta
 
-La diferencia entre que la pelota caiga (68,0 %) y que suba hasta el extremo (70,0 %) es de 2 % de duty. Se consideró perforar el tubo, para que el empuje dependa de la altura, o agregar una fuga regulable en la base; se decidió no modificar la estructura y resolverlo con el lazo de control. El PID debe limitar su salida a un rango alrededor de u0 (por ejemplo, 60 a 80 %) para que una saturación no lance la pelota fuera del tubo.
+La diferencia entre que la pelota caiga (68,0 %) y que suba hasta el extremo (70,0 %) es de 2 % de duty. Se consideró perforar el tubo, para que el empuje dependa de la altura, o agregar una fuga regulable en la base; se decidió no modificar la estructura y resolverlo con el lazo de control. El PID debe limitar su salida a un rango alrededor de u0 para que una saturación no lance la pelota fuera del tubo. En el firmware final, con el optoacoplador y la pelota de telgopor, el duty en automático se limita a 15–65 % alrededor de u0 = 53,5 %.
 
 ## Operacional
 
@@ -34,11 +35,13 @@ El LM358 no es rail-to-rail: su salida queda ~1,5 V por debajo de la alimentaci�
 - A 3,3 V la salida no pasa de ~1,8 V y se pierde la parte alta de la señal del sensor (pelota a menos de ~15 cm).
 - A 5 V llega a ~3,5 V, por encima del máximo del pin del ADC.
 
-La opción preferida es un operacional rail-to-rail (MCP6002, LMV358 o TLV2372) alimentado a 3,3 V. Si se usa el LM358, se alimenta a 5 V y se protege la entrada del ADC con 1 kΩ en serie y un zener 1N4728A de 3,3 V.
+La opción preferida es un operacional rail-to-rail (MCP6002, LMV358 o TLV2372) alimentado a 3,3 V. Si se usa el LM358, se alimenta a 5 V.
+
+Montaje final: LM358 a 5 V, conectado como seguidor (filtro Sallen-Key de ganancia unitaria), con 1 kΩ en serie hacia P0.23. Como seguidor, la salida copia la tensión del sensor, que no supera ~3,1 V, así que no llega al máximo de ~3,5 V del operacional. En una primera versión había además un zener 1N4728A de 3,3 V en la entrada del ADC; se retiró.
 
 ## Sensor Sharp GP2Y0A21YK0F
 
-- Rango útil: 10 a 80 cm. Por debajo de ~10 cm la curva se invierte y una pelota muy cercana da la misma tensión que una lejana; si la pelota sube demasiado, el PID interpretaría que está abajo y soplaría más. Por eso el rango de control se limitó a 10–40 cm medidos desde la rejilla, en un tubo de 55 cm.
+- Rango útil: 10 a 80 cm. Por debajo de ~10 cm la curva se invierte y una pelota muy cercana da la misma tensión que una lejana; si la pelota sube demasiado, el PID interpretaría que está abajo y soplaría más. Por eso el rango de control se limitó medido desde la rejilla, en un tubo de 55 cm. Con la calibración final, entre 35 y 40 cm la lectura casi no cambia, así que el setpoint se limita a 10–30 cm (100–300 mm en el firmware).
 - Alimentación de 5 V con 10 µF y 100 nF junto al sensor, porque consume picos de corriente.
 - Actualiza la medición cada ~40 ms, lo que fija el período del lazo en 40 ms (~25 Hz).
 - La curva no es lineal: se calibra con una tabla de valores medidos a alturas conocidas.
@@ -56,8 +59,10 @@ Con Redlib, `printf` envía el texto a la consola del depurador y no a la UART. 
 
 ## DAC
 
-Si la perturbación senoidal del DAC se sumara solo en el software, el DAC no tendría función física. Opciones para que la perturbación sea real:
+Se evaluaron varios usos para el DAC:
 
-1. Sumar la salida del DAC a la señal del sensor con un operacional sumador (ruido de medición real).
-2. DAC → transistor → un segundo ventilador chico que sople de costado por un orificio del tubo.
-3. Señal acústica proporcional al error (DAC → buzzer piezoeléctrico).
+1. Perturbación sumada al duty, generada con DAC + DMA (senoidal de 0,4 a 5 Hz) o con el Timer1 (cuadrada de 0,2 a 60 s), con un buzzer en la salida como indicador. Se implementó y se ensayó el 12/11 (ver los resultados en el README).
+2. Alarma: el DMA copiaba al DAC una cuadrada de 2 Hz y el buzzer pitaba mientras la pelota estaba fuera de la banda.
+3. Salida analógica de la altura medida.
+
+Decisión final: el DAC entrega la altura medida en tensión (0 mm → 0 V, 350 mm → 3,3 V, ~9,4 mV/mm), actualizada en cada paso del lazo de control. Así la medición se puede ver con un tester o un osciloscopio, independientemente de la PC. La perturbación se eliminó del firmware, porque necesitaba la misma salida. El buzzer se retiró: con la salida en tensión, el transistor conduciría con cualquier altura mayor a ~7 cm. La alarma se pasó al LED rojo de la placa (P0.22).

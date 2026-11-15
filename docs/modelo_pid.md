@@ -23,6 +23,22 @@ Con el error en cm y la salida en % de PWM, los números coinciden con las ganan
 
 Desempeño con el modelo nominal original (u0 = 50 %): margen de fase 51°, margen de ganancia 10,6 dB, sobrepico 3,6 % y establecimiento (2 %) de ~4,4 s para un escalón de 30 a 40 cm. Con el u0 medido la ganancia de la planta baja a 0,73 veces la nominal; el efecto se analiza en la [sección 4](#4-valores-numéricos).
 
+### Ganancias finales ajustadas en el equipo
+
+Los valores de arriba son el diseño inicial, hecho con la pelota de ping-pong y el PWM a 20 kHz sin optoacoplador. El firmware final usa las ganancias ajustadas experimentalmente sobre el equipo (optoacoplador, PWM a 500 Hz, pelota de telgopor y calibración del sensor del 12/11). En el firmware el error está en mm y la salida en ‰ de duty, unidades que dan los mismos números que % PWM y cm:
+
+| Ganancia | Diseño inicial | Firmware final | Unidades |
+|---|---|---|---|
+| u0 | 50 % (supuesto) | **53,5 %** | % PWM |
+| Kp | 0,10 | **0,30** | % PWM / cm (= ‰ / mm) |
+| Ki | 0,02 | **0,030** | % PWM / (cm·s) |
+| Kd | 0,12 | **0,25** | % PWM·s / cm |
+| Tf | 0,05 s | **0,10 s** | s |
+| b | 0,7 | **1** (sin peso de referencia) | — |
+| Ts | 40 ms | **40 ms** (interrupción del Timer1) | ms |
+
+Además, el firmware limita el duty en automático a 15–65 %, mueve el setpoint con una rampa de 20 mm/s y pone la integral en cero cuando la esfera despega de la rejilla. Kd se eligió comparando 0,36, 0,25 y 0,18 con el setpoint en 200 mm; Tf se subió a 0,10 s porque el ruido del sensor hacía saltar el duty. Los ensayos están en el [README](../README.md#6-ensayos-pruebas-y-resultados).
+
 ---
 
 ## 1. Modelo físico
